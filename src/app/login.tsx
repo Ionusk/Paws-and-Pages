@@ -1,45 +1,61 @@
-
-import React, { useEffect, useState } from 'react';
+import { router } from "expo-router";
+import { useEffect, useState } from "react";
 import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  SafeAreaView,
   ActivityIndicator,
+  Platform,
+  SafeAreaView,
   ScrollView,
-} from 'react-native';
-import { router } from 'expo-router';
-import { useAuth0 } from 'react-native-auth0';
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from "react-native";
+import { useAuth0 } from "react-native-auth0";
 
-const CUSTOM_SCHEME = 'pawsandpages';
+const CUSTOM_SCHEME = "pawsandpages";
 
 export default function LoginScreen() {
-  const { authorize, user, isLoading } = useAuth0();
+  const { authorize, user, isLoading, error } = useAuth0();
+
+  useEffect(() => {
+    console.log("AUTH0 DEBUG:", {
+      isLoading,
+      user,
+      error: error?.message,
+    });
+  }, [isLoading, user, error]);
+
   const [loading, setLoading] = useState(false);
-  const [errorMessage, setErrorMessage] = useState('');
+  const [errorMessage, setErrorMessage] = useState("");
 
   useEffect(() => {
     if (user) {
-      router.replace('/home');
+      router.replace("/home");
     }
   }, [user]);
 
   const handleLogin = async () => {
     try {
       setLoading(true);
-      setErrorMessage('');
+      setErrorMessage("");
 
-      await authorize(
-        {
-          scope: 'openid profile email',
-        },
-        {
-          customScheme: CUSTOM_SCHEME,
-        }
-      );
+      if (Platform.OS === "web") {
+        await authorize({
+          scope: "openid profile email",
+        });
+      } else {
+        await authorize(
+          {
+            scope: "openid profile email",
+          },
+          {
+            customScheme: CUSTOM_SCHEME,
+          },
+        );
+      }
     } catch (error) {
-      setErrorMessage('Login could not be completed. Please try again.');
+      console.error("Login error:", error);
+      setErrorMessage("Login could not be completed. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -48,19 +64,27 @@ export default function LoginScreen() {
   const handleSignup = async () => {
     try {
       setLoading(true);
-      setErrorMessage('');
+      setErrorMessage("");
 
-      await authorize(
-        {
-          scope: 'openid profile email',
-          screen_hint: 'signup',
+      const parameters = {
+        scope: "openid profile email",
+        additionalParameters: {
+          screen_hint: "signup",
         },
-        {
+      };
+
+      if (Platform.OS === "web") {
+        await authorize(parameters);
+      } else {
+        await authorize(parameters, {
           customScheme: CUSTOM_SCHEME,
-        }
-      );
+        });
+      }
     } catch (error) {
-      setErrorMessage('Account creation could not be completed. Please try again.');
+      console.error("Signup error:", error);
+      setErrorMessage(
+        "Account creation could not be completed. Please try again.",
+      );
     } finally {
       setLoading(false);
     }
@@ -95,13 +119,11 @@ export default function LoginScreen() {
 
         <Text style={styles.logo}>PAWS & PAGES</Text>
 
-        <Text style={styles.title}>
-          Your little corner awaits.
-        </Text>
+        <Text style={styles.title}>Your little corner awaits.</Text>
 
         <Text style={styles.subtitle}>
-          Sign in to keep your reading adventures,
-          study sessions and friends close.
+          Sign in to keep your reading adventures, study sessions and friends
+          close.
         </Text>
 
         <View style={styles.card}>
@@ -124,12 +146,10 @@ export default function LoginScreen() {
             onPress={handleSignup}
             activeOpacity={0.85}
           >
-            <Text style={styles.signupButtonText}>
-              Create an account
-            </Text>
+            <Text style={styles.signupButtonText}>Create an account</Text>
           </TouchableOpacity>
 
-          {errorMessage !== '' && (
+          {errorMessage !== "" && (
             <Text style={styles.error}>{errorMessage}</Text>
           )}
         </View>
@@ -145,25 +165,25 @@ export default function LoginScreen() {
 const styles = StyleSheet.create({
   safe: {
     flex: 1,
-    backgroundColor: '#FFF8F1',
+    backgroundColor: "#FFF8F1",
   },
   container: {
     flexGrow: 1,
     padding: 25,
-    justifyContent: 'center',
+    justifyContent: "center",
   },
   backButton: {
-    position: 'absolute',
+    position: "absolute",
     top: 15,
     left: 25,
     zIndex: 1,
   },
   backText: {
-    color: '#9B8588',
+    color: "#9B8588",
     fontSize: 14,
   },
   mascotContainer: {
-    alignItems: 'center',
+    alignItems: "center",
     marginTop: 45,
     marginBottom: 12,
   },
@@ -176,95 +196,95 @@ const styles = StyleSheet.create({
     marginLeft: 90,
   },
   logo: {
-    color: '#806A70',
+    color: "#806A70",
     fontSize: 17,
-    fontWeight: '900',
+    fontWeight: "900",
     letterSpacing: 4,
-    textAlign: 'center',
+    textAlign: "center",
     marginTop: 10,
   },
   title: {
-    color: '#59484C',
+    color: "#59484C",
     fontSize: 29,
-    fontWeight: '800',
-    textAlign: 'center',
+    fontWeight: "800",
+    textAlign: "center",
     marginTop: 22,
   },
   subtitle: {
-    color: '#9B8588',
+    color: "#9B8588",
     fontSize: 13,
     lineHeight: 21,
-    textAlign: 'center',
+    textAlign: "center",
     marginTop: 12,
     marginBottom: 28,
     paddingHorizontal: 8,
   },
   card: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: "#FFFFFF",
     borderRadius: 26,
     padding: 23,
-    shadowColor: '#806A70',
+    shadowColor: "#806A70",
     shadowOpacity: 0.07,
     shadowRadius: 15,
     elevation: 3,
   },
   cardTitle: {
-    color: '#59484C',
+    color: "#59484C",
     fontSize: 22,
-    fontWeight: '800',
-    textAlign: 'center',
+    fontWeight: "800",
+    textAlign: "center",
   },
   cardDescription: {
-    color: '#9B8588',
+    color: "#9B8588",
     fontSize: 12,
-    textAlign: 'center',
+    textAlign: "center",
     marginTop: 9,
     marginBottom: 25,
   },
   loginButton: {
-    backgroundColor: '#DDA6AD',
+    backgroundColor: "#DDA6AD",
     padding: 18,
     borderRadius: 17,
   },
   loginButtonText: {
-    color: '#FFFFFF',
+    color: "#FFFFFF",
     fontSize: 15,
-    fontWeight: '800',
-    textAlign: 'center',
+    fontWeight: "800",
+    textAlign: "center",
   },
   signupButton: {
-    backgroundColor: '#F4E8ED',
+    backgroundColor: "#F4E8ED",
     padding: 18,
     borderRadius: 17,
     marginTop: 12,
   },
   signupButtonText: {
-    color: '#9B6874',
+    color: "#9B6874",
     fontSize: 15,
-    fontWeight: '800',
-    textAlign: 'center',
+    fontWeight: "800",
+    textAlign: "center",
   },
   error: {
-    color: '#B44B58',
+    color: "#B44B58",
     fontSize: 12,
-    textAlign: 'center',
+    textAlign: "center",
     marginTop: 15,
   },
   footer: {
-    color: '#B7A5A7',
+    color: "#B7A5A7",
     fontSize: 11,
-    textAlign: 'center',
+    textAlign: "center",
     marginTop: 30,
     marginBottom: 20,
   },
   loadingContainer: {
     flex: 1,
-    backgroundColor: '#FFF8F1',
-    justifyContent: 'center',
-    alignItems: 'center',
+    backgroundColor: "#FFF8F1",
+    justifyContent: "center",
+    alignItems: "center",
   },
   loadingText: {
-    color: '#9B8588',
+    color: "#9B8588",
     marginTop: 15,
     fontSize: 13,
   },
