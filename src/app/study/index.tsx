@@ -1,129 +1,689 @@
+
 import React from 'react';
 import {
-  View, Text, StyleSheet, ScrollView,
-  TouchableOpacity, SafeAreaView,
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  Pressable,
+  SafeAreaView,
 } from 'react-native';
 import { router } from 'expo-router';
+import {
+  ArrowLeft,
+  FileText,
+  Brain,
+  Headphones,
+  GraduationCap,
+  Sparkles,
+  Clock3,
+  BookOpen,
+  ArrowUpRight,
+  PawPrint,
+  Target,
+  LibraryBig,
+} from 'lucide-react-native';
 
 const COLORS = {
-  bg: '#FFF8F1',
-  text: '#59484C',
-  muted: '#9B8588',
-  pink: '#DDA6AD',
+  background: '#E9DDF2',
+  pink: '#F6C8D4',
+  darkPink: '#B77D88',
+  text: '#493653',
+  muted: '#806B87',
+  white: '#FFFFFF',
+  lavender: '#F5ECFA',
+  lightPink: '#FFF0F2',
+  sage: '#DCE6D8',
+  peach: '#F7E1D5',
+  purple: '#9B829F',
+  border: '#EDE3F0',
 };
 
 const tools = [
   {
-    emoji: '📄',
-    title: 'PDF Summarizer',
-    description: 'Upload your notes and get an easy-to-understand summary.',
+    title: 'Study materials',
+    subtitle: 'Upload PDFs, Word documents, presentations and notes.',
+    description: 'UPLOAD & ORGANIZE',
     route: '/study/upload',
-    color: '#E9E1F1',
+    color: COLORS.lavender,
+    icon: FileText,
   },
   {
-    emoji: '🧠',
-    title: 'Practice Quiz',
-    description: 'Test your knowledge with questions generated from your notes.',
-    route: '/study/quiz',
-    color: '#DCE6D8',
-  },
-  {
-    emoji: '🎧',
-    title: 'Audio Lessons',
-    description: 'Turn your study materials into audio lessons.',
+    title: 'AI summaries',
+    subtitle: 'Turn long courses into clear, easy-to-understand summaries.',
+    description: 'UNDERSTAND BETTER',
     route: '/study/summary',
-    color: '#F7E1D5',
+    color: COLORS.lightPink,
+    icon: BookOpen,
+  },
+  {
+    title: 'Practice quizzes',
+    subtitle: 'Challenge yourself with questions based on your materials.',
+    description: 'TEST YOUR KNOWLEDGE',
+    route: '/study/quiz',
+    color: COLORS.sage,
+    icon: Brain,
+  },
+  {
+    title: 'Audio lessons',
+    subtitle: 'Listen to your study materials whenever you want.',
+    description: 'LEARN ON THE GO',
+    route: '/study/summary',
+    color: COLORS.peach,
+    icon: Headphones,
   },
 ];
 
 export default function StudyScreen() {
   return (
     <SafeAreaView style={styles.safe}>
-      <ScrollView contentContainerStyle={styles.container}>
-        <TouchableOpacity onPress={() => router.back()}>
-          <Text style={styles.back}>← Back</Text>
-        </TouchableOpacity>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.scrollContent}
+      >
+        <View style={styles.container}>
+          {/* Decorative background */}
+          <View style={styles.blobTop} pointerEvents="none" />
+          <View style={styles.blobBottom} pointerEvents="none" />
 
-        <Text style={styles.eyebrow}>YOUR LEARNING CORNER ✨</Text>
-        <Text style={styles.title}>Study time!</Text>
-        <Text style={styles.subtitle}>
-          Let's make learning a little easier today.
-        </Text>
+          {/* Header */}
+          <View style={styles.header}>
+            <Pressable
+              onPress={() => router.back()}
+              style={({ pressed }) => [
+                styles.backButton,
+                pressed && styles.pressed,
+              ]}
+            >
+              <ArrowLeft size={20} color={COLORS.text} />
+            </Pressable>
 
-        <View style={styles.mascot}>
-          <Text style={{ fontSize: 55 }}>🐶</Text>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.mascotTitle}>Laica says...</Text>
-            <Text style={styles.mascotText}>
-              You've got this! One page at a time.
+            <View style={styles.headerBrand}>
+              <Text style={styles.brand}>PAWS & PAGES</Text>
+              <Text style={styles.brandSubtitle}>YOUR LEARNING SPACE</Text>
+            </View>
+
+            <View style={styles.headerIcon}>
+              <GraduationCap size={22} color={COLORS.purple} />
+            </View>
+          </View>
+
+          {/* Welcome */}
+          <View style={styles.intro}>
+            <View style={styles.eyebrowRow}>
+              <Sparkles size={14} color={COLORS.darkPink} />
+              <Text style={styles.eyebrow}>YOUR LEARNING CORNER</Text>
+            </View>
+
+            <Text style={styles.title}>Make room to grow.</Text>
+
+            <Text style={styles.subtitle}>
+              A little progress every day adds up to something wonderful.
             </Text>
           </View>
-        </View>
 
-        <Text style={styles.section}>What would you like to do?</Text>
-
-        {tools.map((tool) => (
-          <TouchableOpacity
-            key={tool.title}
-            style={[styles.card, { backgroundColor: tool.color }]}
-            onPress={() => router.push(tool.route as any)}
-            activeOpacity={0.85}
-          >
-            <Text style={styles.emoji}>{tool.emoji}</Text>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.cardTitle}>{tool.title}</Text>
-              <Text style={styles.cardDescription}>
-                {tool.description}
-              </Text>
-              <Text style={styles.open}>Open tool →</Text>
+          {/* Laica message */}
+          <View style={styles.mascotCard}>
+            <View style={styles.mascotCircle}>
+              <PawPrint size={36} color={COLORS.darkPink} />
+              <View style={styles.mascotSparkle}>
+                <Sparkles size={13} color={COLORS.purple} />
+              </View>
             </View>
-          </TouchableOpacity>
-        ))}
+
+            <View style={styles.mascotContent}>
+              <Text style={styles.mascotEyebrow}>A LITTLE REMINDER</Text>
+              <Text style={styles.mascotTitle}>Laica believes in you!</Text>
+              <Text style={styles.mascotText}>
+                You don't have to know everything today. Just take the
+                next little step.
+              </Text>
+            </View>
+          </View>
+
+          {/* Progress overview */}
+          <View style={styles.progressCard}>
+            <View style={styles.progressHeader}>
+              <View>
+                <Text style={styles.progressEyebrow}>YOUR PROGRESS</Text>
+                <Text style={styles.progressTitle}>Learning journey</Text>
+              </View>
+
+              <View style={styles.targetIcon}>
+                <Target size={21} color={COLORS.darkPink} />
+              </View>
+            </View>
+
+            <View style={styles.progressStats}>
+              <View style={styles.progressStat}>
+                <LibraryBig size={19} color={COLORS.purple} />
+                <Text style={styles.progressNumber}>—</Text>
+                <Text style={styles.progressLabel}>Materials</Text>
+              </View>
+
+              <View style={styles.statDivider} />
+
+              <View style={styles.progressStat}>
+                <Clock3 size={19} color={COLORS.darkPink} />
+                <Text style={styles.progressNumber}>—</Text>
+                <Text style={styles.progressLabel}>Study time</Text>
+              </View>
+
+              <View style={styles.statDivider} />
+
+              <View style={styles.progressStat}>
+                <Brain size={19} color="#758B72" />
+                <Text style={styles.progressNumber}>—</Text>
+                <Text style={styles.progressLabel}>Quizzes</Text>
+              </View>
+            </View>
+
+            <Text style={styles.progressNote}>
+              Your learning statistics will grow as you use the app.
+            </Text>
+          </View>
+
+          {/* Tools */}
+          <View style={styles.toolsSection}>
+            <View style={styles.sectionHeader}>
+              <View>
+                <Text style={styles.sectionEyebrow}>READY WHEN YOU ARE</Text>
+                <Text style={styles.sectionTitle}>Explore your tools</Text>
+              </View>
+
+              <Sparkles size={20} color={COLORS.darkPink} />
+            </View>
+
+            <View style={styles.toolsGrid}>
+              {tools.map((tool, index) => {
+                const Icon = tool.icon;
+
+                return (
+                  <Pressable
+                    key={tool.title}
+                    style={({ pressed }) => [
+                      styles.toolCard,
+                      { backgroundColor: tool.color },
+                      pressed && styles.cardPressed,
+                    ]}
+                    onPress={() => router.push(tool.route as any)}
+                  >
+                    <View style={styles.toolTop}>
+                      <View style={styles.toolIcon}>
+                        <Icon
+                          size={25}
+                          color={COLORS.text}
+                          strokeWidth={1.7}
+                        />
+                      </View>
+
+                      <ArrowUpRight
+                        size={20}
+                        color={COLORS.muted}
+                      />
+                    </View>
+
+                    <View>
+                      <Text style={styles.toolTitle}>{tool.title}</Text>
+                      <Text style={styles.toolDescription}>
+                        {tool.subtitle}
+                      </Text>
+                    </View>
+
+                    <View style={styles.toolFooter}>
+                      <Text style={styles.toolTag}>{tool.description}</Text>
+                    </View>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </View>
+
+          {/* Bottom note */}
+          <View style={styles.bottomCard}>
+            <View style={styles.bottomIcon}>
+              <BookOpen size={21} color={COLORS.darkPink} />
+            </View>
+
+            <View style={styles.bottomContent}>
+              <Text style={styles.bottomTitle}>Small steps, big dreams.</Text>
+              <Text style={styles.bottomText}>
+                Your notes, summaries and learning progress,
+                all in one cozy place.
+              </Text>
+            </View>
+          </View>
+
+          {/* Footer */}
+          <View style={styles.footer}>
+            <PawPrint size={16} color={COLORS.darkPink} />
+            <Text style={styles.footerText}>MADE WITH LOVE, PAWS & PAGES</Text>
+            <Sparkles size={14} color={COLORS.purple} />
+          </View>
+        </View>
       </ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: COLORS.bg },
-  container: { padding: 22, paddingBottom: 40 },
-  back: { color: COLORS.muted, fontSize: 14, marginBottom: 28 },
+  safe: {
+    flex: 1,
+    backgroundColor: COLORS.background,
+  },
+
+  scrollContent: {
+    flexGrow: 1,
+  },
+
+  container: {
+    width: '100%',
+    maxWidth: 1150,
+    alignSelf: 'center',
+    paddingHorizontal: 35,
+    paddingTop: 24,
+    paddingBottom: 35,
+    overflow: 'hidden',
+  },
+
+  blobTop: {
+    position: 'absolute',
+    top: -120,
+    right: -100,
+    width: 290,
+    height: 290,
+    borderRadius: 145,
+    backgroundColor: COLORS.pink,
+    opacity: 0.45,
+  },
+
+  blobBottom: {
+    position: 'absolute',
+    bottom: 180,
+    left: -150,
+    width: 300,
+    height: 300,
+    borderRadius: 150,
+    backgroundColor: '#C8B5E5',
+    opacity: 0.35,
+  },
+
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 38,
+  },
+
+  backButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 16,
+    backgroundColor: COLORS.white,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+
+  headerBrand: {
+    alignItems: 'center',
+  },
+
+  brand: {
+    color: COLORS.text,
+    fontSize: 17,
+    fontFamily: 'PlayfairDisplay_700Bold',
+    letterSpacing: 2.5,
+  },
+
+  brandSubtitle: {
+    color: COLORS.muted,
+    fontSize: 8,
+    fontFamily: 'Nunito_800ExtraBold',
+    letterSpacing: 2,
+    marginTop: 4,
+  },
+
+  headerIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 16,
+    backgroundColor: COLORS.lavender,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+
+  intro: {
+    alignItems: 'center',
+    marginBottom: 28,
+  },
+
+  eyebrowRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    marginBottom: 9,
+  },
+
   eyebrow: {
-    color: COLORS.pink, fontSize: 10,
-    fontWeight: '800', letterSpacing: 2,
+    color: COLORS.darkPink,
+    fontSize: 10,
+    fontFamily: 'Nunito_800ExtraBold',
+    letterSpacing: 2,
   },
+
   title: {
-    color: COLORS.text, fontSize: 34,
-    fontWeight: '800', marginTop: 8,
+    color: COLORS.text,
+    fontSize: 37,
+    fontFamily: 'PlayfairDisplay_700Bold',
+    textAlign: 'center',
   },
+
   subtitle: {
-    color: COLORS.muted, fontSize: 14,
-    marginTop: 8, marginBottom: 25,
+    color: COLORS.muted,
+    fontSize: 13,
+    fontFamily: 'Nunito_400Regular',
+    textAlign: 'center',
+    marginTop: 9,
+    maxWidth: 470,
+    lineHeight: 20,
   },
-  mascot: {
-    backgroundColor: '#F4E8ED', borderRadius: 22,
-    padding: 18, flexDirection: 'row',
-    alignItems: 'center', gap: 15, marginBottom: 30,
+
+  mascotCard: {
+    backgroundColor: COLORS.white,
+    borderRadius: 25,
+    padding: 23,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 19,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    marginBottom: 22,
+    shadowColor: '#705B83',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.06,
+    shadowRadius: 10,
+    elevation: 2,
   },
-  mascotTitle: { color: COLORS.text, fontWeight: '800', fontSize: 16 },
-  mascotText: { color: COLORS.muted, fontSize: 12, marginTop: 5 },
-  section: {
-    fontSize: 19, color: COLORS.text,
-    fontWeight: '800', marginBottom: 15,
+
+  mascotCircle: {
+    width: 76,
+    height: 76,
+    borderRadius: 25,
+    backgroundColor: COLORS.lightPink,
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
   },
-  card: {
-    borderRadius: 22, padding: 20,
-    flexDirection: 'row', alignItems: 'center',
-    marginBottom: 14, gap: 17,
+
+  mascotSparkle: {
+    position: 'absolute',
+    top: -5,
+    right: -5,
+    width: 27,
+    height: 27,
+    borderRadius: 14,
+    backgroundColor: COLORS.lavender,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  emoji: { fontSize: 38 },
-  cardTitle: { fontSize: 17, fontWeight: '800', color: COLORS.text },
-  cardDescription: {
-    color: COLORS.muted, fontSize: 12,
-    lineHeight: 18, marginTop: 6,
+
+  mascotContent: {
+    flex: 1,
   },
-  open: {
-    color: '#A66F7A', fontWeight: '800',
-    fontSize: 12, marginTop: 10,
+
+  mascotEyebrow: {
+    color: COLORS.darkPink,
+    fontSize: 9,
+    fontFamily: 'Nunito_800ExtraBold',
+    letterSpacing: 1.7,
+    marginBottom: 5,
+  },
+
+  mascotTitle: {
+    color: COLORS.text,
+    fontSize: 19,
+    fontFamily: 'PlayfairDisplay_700Bold',
+  },
+
+  mascotText: {
+    color: COLORS.muted,
+    fontSize: 12,
+    fontFamily: 'Nunito_400Regular',
+    lineHeight: 18,
+    marginTop: 5,
+  },
+
+  progressCard: {
+    backgroundColor: COLORS.white,
+    borderRadius: 25,
+    padding: 23,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    marginBottom: 38,
+  },
+
+  progressHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 23,
+  },
+
+  progressEyebrow: {
+    color: COLORS.muted,
+    fontSize: 9,
+    fontFamily: 'Nunito_800ExtraBold',
+    letterSpacing: 1.8,
+  },
+
+  progressTitle: {
+    color: COLORS.text,
+    fontSize: 21,
+    fontFamily: 'PlayfairDisplay_700Bold',
+    marginTop: 4,
+  },
+
+  targetIcon: {
+    width: 43,
+    height: 43,
+    borderRadius: 15,
+    backgroundColor: COLORS.lightPink,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  progressStats: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-around',
+  },
+
+  progressStat: {
+    flex: 1,
+    alignItems: 'center',
+    gap: 5,
+  },
+
+  progressNumber: {
+    color: COLORS.text,
+    fontSize: 24,
+    fontFamily: 'PlayfairDisplay_700Bold',
+  },
+
+  progressLabel: {
+    color: COLORS.muted,
+    fontSize: 10,
+    fontFamily: 'Nunito_800ExtraBold',
+    textAlign: 'center',
+  },
+
+  statDivider: {
+    width: 1,
+    height: 52,
+    backgroundColor: COLORS.border,
+  },
+
+  progressNote: {
+    color: COLORS.muted,
+    fontSize: 10,
+    fontFamily: 'Nunito_400Regular',
+    textAlign: 'center',
+    marginTop: 20,
+  },
+
+  toolsSection: {
+    marginBottom: 30,
+  },
+
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 18,
+  },
+
+  sectionEyebrow: {
+    color: COLORS.darkPink,
+    fontSize: 9,
+    fontFamily: 'Nunito_800ExtraBold',
+    letterSpacing: 1.8,
+    marginBottom: 5,
+  },
+
+  sectionTitle: {
+    color: COLORS.text,
+    fontSize: 24,
+    fontFamily: 'PlayfairDisplay_700Bold',
+  },
+
+  toolsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 16,
+  },
+
+  toolCard: {
+    width: '48%',
+    flexGrow: 1,
+    minHeight: 215,
+    borderRadius: 24,
+    padding: 21,
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.9)',
+    shadowColor: '#705B83',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.07,
+    shadowRadius: 9,
+    elevation: 3,
+  },
+
+  toolTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 18,
+  },
+
+  toolIcon: {
+    width: 49,
+    height: 49,
+    borderRadius: 17,
+    backgroundColor: 'rgba(255,255,255,0.75)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+
+  toolTitle: {
+    color: COLORS.text,
+    fontSize: 19,
+    fontFamily: 'PlayfairDisplay_700Bold',
+  },
+
+  toolDescription: {
+    color: COLORS.muted,
+    fontSize: 11,
+    fontFamily: 'Nunito_400Regular',
+    lineHeight: 17,
+    marginTop: 7,
+  },
+
+  toolFooter: {
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(128,107,135,0.15)',
+    paddingTop: 12,
+    marginTop: 17,
+  },
+
+  toolTag: {
+    color: COLORS.muted,
+    fontSize: 9,
+    fontFamily: 'Nunito_800ExtraBold',
+    letterSpacing: 1,
+  },
+
+  bottomCard: {
+    backgroundColor: COLORS.lavender,
+    borderRadius: 22,
+    padding: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 15,
+    borderWidth: 1,
+    borderColor: COLORS.white,
+  },
+
+  bottomIcon: {
+    width: 45,
+    height: 45,
+    borderRadius: 15,
+    backgroundColor: COLORS.white,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  bottomContent: {
+    flex: 1,
+  },
+
+  bottomTitle: {
+    color: COLORS.text,
+    fontSize: 16,
+    fontFamily: 'PlayfairDisplay_700Bold',
+  },
+
+  bottomText: {
+    color: COLORS.muted,
+    fontSize: 11,
+    fontFamily: 'Nunito_400Regular',
+    lineHeight: 17,
+    marginTop: 4,
+  },
+
+  footer: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 9,
+    marginTop: 30,
+  },
+
+  footerText: {
+    color: COLORS.muted,
+    fontSize: 9,
+    fontFamily: 'Nunito_800ExtraBold',
+    letterSpacing: 1.3,
+  },
+
+  pressed: {
+    opacity: 0.8,
+    transform: [{ scale: 0.97 }],
+  },
+
+  cardPressed: {
+    opacity: 0.85,
+    transform: [{ scale: 0.985 }],
   },
 });

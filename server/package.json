@@ -12,9 +12,11 @@
     "cors": "latest",
     "dotenv": "latest",
     "express": "latest",
+    "express-oauth2-jwt-bearer": "^1.11.0",
     "jszip": "latest",
     "mammoth": "latest",
     "multer": "latest",
+    "pg": "^8.23.1",
     "sharp": "^0.35.5"
   },
   "devDependencies": {
