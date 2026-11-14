@@ -60,7 +60,7 @@ export default function HomeScreen() {
           onPress={() => router.replace('/home')}
         >
           <Text style={styles.buttonText}>
-            Let's begin!
+            Let's beginnnnnnnnnn!
           
           </Text>
           <Text style={styles.buttonIcon}>♡</Text>
