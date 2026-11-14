@@ -5,11 +5,10 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "pawsandpages",
+    "scheme": "gitex",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/expo.icon",
-      "bundleIdentifier": "com.anonymous.gitex"
+      "icon": "./assets/expo.icon"
     },
     "android": {
       "adaptiveIcon": {
@@ -36,13 +35,7 @@
         }
       ],
       "expo-video",
-      [
-        "react-native-auth0",
-        {
-          "domain": "dev-sit351gqklajarwi.us.auth0.com",
-          "customScheme": "pawsandpages"
-        }
-      ]
+      "expo-font"
     ],
     "experiments": {
       "typedRoutes": true,

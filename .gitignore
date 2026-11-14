@@ -42,7 +42,5 @@ example
 /ios
 /android
 
-# Environment variables
-.env
-.env.*
-!.env.example
+server/.env
+server/node_modules/
