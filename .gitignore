@@ -43,4 +43,6 @@ example
 /android
 
 server/.env
-server/node_modules/
+server/node_modules/.env
+
+.env

@@ -1,26 +1,26 @@
 import { router } from "expo-router";
 import {
-    ArrowLeft,
-    ArrowRight,
-    BookOpen,
-    CalendarCheck,
-    Check,
-    Clock3,
-    Coins,
-    GraduationCap,
-    LibraryBig,
-    PenLine,
-    Sparkles,
-    Trophy,
+  ArrowLeft,
+  ArrowRight,
+  BookOpen,
+  CalendarCheck,
+  Check,
+  Clock3,
+  Coins,
+  GraduationCap,
+  LibraryBig,
+  PenLine,
+  Sparkles,
+  Trophy,
 } from "lucide-react-native";
 import {
-    Pressable,
-    SafeAreaView,
-    ScrollView,
-    StatusBar,
-    StyleSheet,
-    Text,
-    View,
+  Pressable,
+  SafeAreaView,
+  ScrollView,
+  StatusBar,
+  StyleSheet,
+  Text,
+  View,
 } from "react-native";
 
 import { usePawWallet } from "../hooks/usePawWallet";
@@ -212,7 +212,7 @@ export default function QuestsScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <StatusBar barStyle="dark-content" backgroundColor={COLORS.background} />
+      <StatusBar barStyle="dark-content" />
 
       <ScrollView
         style={styles.container}

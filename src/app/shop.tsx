@@ -1,24 +1,29 @@
 import { router } from "expo-router";
 import {
-    ArrowLeft,
-    Check,
-    Coins,
-    Palette,
-    ShoppingBag,
-    Sparkles,
+  ArrowLeft,
+  Check,
+  Coins,
+  Palette,
+  ShoppingBag,
+  Sparkles,
 } from "lucide-react-native";
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
-    Pressable,
-    ScrollView,
-    StyleSheet,
-    Text,
-    useWindowDimensions,
-    View,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  useWindowDimensions,
+  View,
 } from "react-native";
+import { useAuth0 } from "react-native-auth0";
 
 import { AnimatedMascot } from "../components/AnimatedMascot";
 import { usePawWallet } from "../hooks/usePawWallet";
+
+// --------------------------------------------------
+// CONFIG
+// --------------------------------------------------
 
 const COLORS = {
   background: "#E9DDF2",
@@ -33,6 +38,14 @@ const COLORS = {
   border: "#E9DDEA",
 };
 
+const API_URL = "http://localhost:3001";
+const API_AUDIENCE = "https://paws-and-pages-api";
+const AUTH_SCOPE = "openid profile email offline_access";
+
+// --------------------------------------------------
+// TYPES
+// --------------------------------------------------
+
 type Skin = {
   id: string;
   name: string;
@@ -42,6 +55,24 @@ type Skin = {
   accent: string;
   decoration: string;
 };
+
+type ShopSkin = Skin & {
+  owned: boolean;
+  equipped: boolean;
+};
+
+type ShopApiItem = {
+  id: string;
+  name: string;
+  description: string | null;
+  price: number | string;
+  owned: boolean;
+  equipped: boolean;
+};
+
+// --------------------------------------------------
+// SKIN VISUALS
+// --------------------------------------------------
 
 const SKINS: Skin[] = [
   {
@@ -91,36 +122,227 @@ const SKINS: Skin[] = [
   },
 ];
 
+// --------------------------------------------------
+// SHOP SCREEN
+// --------------------------------------------------
+
 export default function ShopScreen() {
   const { width } = useWindowDimensions();
   const isWide = width >= 900;
   const isTablet = width >= 600;
 
-  const { balance, loading: walletLoading } = usePawWallet();
+  const { getCredentials } = useAuth0();
+
+  const { balance, loading: walletLoading, refreshWallet } = usePawWallet();
+
   const displayedBalance = walletLoading ? "..." : (balance ?? "—");
 
-  const [owned, setOwned] = useState<string[]>(["classic"]);
-  const [equipped, setEquipped] = useState("classic");
+  const [skins, setSkins] = useState<ShopSkin[]>([]);
+  const [shopLoading, setShopLoading] = useState(true);
+  const [busyItemId, setBusyItemId] = useState<string | null>(null);
   const [notice, setNotice] = useState("");
 
-  const selectedSkin = SKINS.find((skin) => skin.id === equipped) ?? SKINS[0];
+  // ------------------------------------------------
+  // AUTHENTICATION
+  // ------------------------------------------------
 
-  const ownedSkins = SKINS.filter((skin) => owned.includes(skin.id));
-  const discoverSkins = SKINS.filter((skin) => !owned.includes(skin.id));
+  const getAuthHeaders = useCallback(async () => {
+    const credentials = await getCredentials(AUTH_SCOPE, 0, {
+      audience: API_AUDIENCE,
+    });
 
-  const handleBuy = (skin: Skin) => {
-    setNotice(
-      `Purchases are not connected to Solana yet. No PAW has been charged for ${skin.name}.`,
-    );
+    if (!credentials.accessToken) {
+      throw new Error("Nu am putut obține tokenul Auth0.");
+    }
+
+    return {
+      Authorization: `Bearer ${credentials.accessToken}`,
+    };
+  }, [getCredentials]);
+
+  // ------------------------------------------------
+  // LOAD SHOP CATALOG AND INVENTORY
+  // ------------------------------------------------
+
+  const loadShop = useCallback(async () => {
+    try {
+      setShopLoading(true);
+
+      const headers = await getAuthHeaders();
+
+      const response = await fetch(`${API_URL}/api/shop`, {
+        method: "GET",
+        headers,
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || "Nu am putut încărca magazinul.");
+      }
+
+      if (!Array.isArray(data.items)) {
+        throw new Error("Răspuns invalid primit de la magazin.");
+      }
+
+      const apiItems: ShopApiItem[] = data.items;
+
+      const mappedSkins: ShopSkin[] = apiItems.map((item) => {
+        const visual = SKINS.find((skin) => skin.id === item.id);
+
+        if (!visual) {
+          throw new Error(`Lipsește configurația vizuală pentru ${item.id}.`);
+        }
+
+        return {
+          ...visual,
+          id: item.id,
+          name: item.name,
+          description: item.description ?? "",
+          price: Number(item.price),
+          owned: Boolean(item.owned),
+          equipped: Boolean(item.equipped),
+        };
+      });
+
+      setSkins(mappedSkins);
+    } catch (error) {
+      console.error("Shop loading error:", error);
+
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "Nu am putut încărca magazinul.",
+      );
+    } finally {
+      setShopLoading(false);
+    }
+  }, [getAuthHeaders]);
+
+  useEffect(() => {
+    loadShop();
+  }, [loadShop]);
+
+  // ------------------------------------------------
+  // CURRENT SKIN AND COLLECTION
+  // ------------------------------------------------
+
+  const selectedSkin = skins.find((skin) => skin.equipped) ?? SKINS[0];
+
+  const ownedSkins = skins.filter((skin) => skin.owned);
+  const discoverSkins = skins.filter((skin) => !skin.owned);
+
+  // ------------------------------------------------
+  // PURCHASE SKIN WITH PAW
+  // ------------------------------------------------
+
+  const handleBuy = async (skin: ShopSkin) => {
+    if (busyItemId !== null) return;
+
+    try {
+      setBusyItemId(skin.id);
+      setNotice("");
+
+      const headers = await getAuthHeaders();
+
+      const idempotencyKey = `shop_${skin.id}_${Date.now()}_${Math.random()
+        .toString(36)
+        .slice(2, 10)}`;
+
+      const response = await fetch(`${API_URL}/api/shop/purchase`, {
+        method: "POST",
+        headers: {
+          ...headers,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          itemId: skin.id,
+          idempotencyKey,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (response.status === 202 || data.pendingConfirmation) {
+        setNotice(
+          "Tranzacția a fost trimisă către Solana, dar încă se verifică. Nu încerca să cumperi din nou acest skin.",
+        );
+        return;
+      }
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || "Achiziția nu a putut fi efectuată.");
+      }
+
+      await Promise.all([loadShop(), refreshWallet()]);
+
+      setNotice(`${skin.name} a fost achiziționat cu succes!`);
+    } catch (error) {
+      console.error("Shop purchase error:", error);
+
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "A apărut o eroare la achiziție.",
+      );
+    } finally {
+      setBusyItemId(null);
+    }
   };
 
-  const handleEquip = (skin: Skin) => {
-    setEquipped(skin.id);
-    setNotice(`${skin.name} is now selected!`);
+  // ------------------------------------------------
+  // EQUIP SKIN
+  // ------------------------------------------------
+
+  const handleEquip = async (skin: ShopSkin) => {
+    if (busyItemId !== null || skin.equipped) return;
+
+    try {
+      setBusyItemId(skin.id);
+      setNotice("");
+
+      const headers = await getAuthHeaders();
+
+      const response = await fetch(`${API_URL}/api/shop/equip`, {
+        method: "POST",
+        headers: {
+          ...headers,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          itemId: skin.id,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || "Nu am putut echipa acest skin.");
+      }
+
+      await loadShop();
+
+      setNotice(`${skin.name} este acum echipat!`);
+    } catch (error) {
+      console.error("Shop equip error:", error);
+
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "A apărut o eroare la echipare.",
+      );
+    } finally {
+      setBusyItemId(null);
+    }
   };
 
-  const renderSkinCard = (skin: Skin, isOwned: boolean) => {
-    const isEquipped = equipped === skin.id;
+  // ------------------------------------------------
+  // SKIN CARD
+  // ------------------------------------------------
+
+  const renderSkinCard = (skin: ShopSkin, isOwned: boolean) => {
+    const isEquipped = skin.equipped;
+    const isBusy = busyItemId === skin.id;
 
     return (
       <View
@@ -145,6 +367,7 @@ export default function ShopScreen() {
                 { backgroundColor: skin.decoration },
               ]}
             />
+
             <Sparkles
               size={23}
               color={COLORS.white}
@@ -174,14 +397,17 @@ export default function ShopScreen() {
             {isOwned ? (
               <Pressable
                 onPress={() => handleEquip(skin)}
-                disabled={isEquipped}
+                disabled={isEquipped || busyItemId !== null}
                 style={({ pressed }) => [
                   styles.skinAction,
                   isEquipped && styles.skinActionEquipped,
                   pressed && !isEquipped && styles.pressed,
+                  isBusy && styles.pressed,
                 ]}
               >
-                {isEquipped ? (
+                {isBusy ? (
+                  <Text style={styles.skinActionText}>Please wait...</Text>
+                ) : isEquipped ? (
                   <>
                     <Check size={15} color={COLORS.white} />
                     <Text style={styles.skinActionEquippedText}>Equipped</Text>
@@ -193,14 +419,22 @@ export default function ShopScreen() {
             ) : (
               <Pressable
                 onPress={() => handleBuy(skin)}
+                disabled={busyItemId !== null}
                 style={({ pressed }) => [
                   styles.skinAction,
                   styles.buyAction,
                   pressed && styles.pressed,
+                  isBusy && styles.pressed,
                 ]}
               >
-                <Coins size={15} color={COLORS.text} />
-                <Text style={styles.buyActionText}>{skin.price}</Text>
+                {isBusy ? (
+                  <Text style={styles.buyActionText}>Please wait...</Text>
+                ) : (
+                  <>
+                    <Coins size={15} color={COLORS.text} />
+                    <Text style={styles.buyActionText}>{skin.price}</Text>
+                  </>
+                )}
               </Pressable>
             )}
           </View>
@@ -208,6 +442,10 @@ export default function ShopScreen() {
       </View>
     );
   };
+
+  // ------------------------------------------------
+  // RENDER
+  // ------------------------------------------------
 
   return (
     <View style={styles.screen}>
@@ -305,6 +543,7 @@ export default function ShopScreen() {
                   </Text>
                   <Text style={styles.previewName}>{selectedSkin.name}</Text>
                 </View>
+
                 <View style={styles.previewCheck}>
                   <Check size={17} color={COLORS.white} />
                 </View>
@@ -317,6 +556,7 @@ export default function ShopScreen() {
             <View style={styles.notice}>
               <Sparkles size={16} color={COLORS.darkPink} />
               <Text style={styles.noticeText}>{notice}</Text>
+
               <Pressable onPress={() => setNotice("")}>
                 <Text style={styles.noticeDismiss}>Dismiss</Text>
               </Pressable>
@@ -341,9 +581,15 @@ export default function ShopScreen() {
               </View>
             </View>
 
-            <View style={styles.skinGrid}>
-              {ownedSkins.map((skin) => renderSkinCard(skin, true))}
-            </View>
+            {shopLoading ? (
+              <Text style={styles.sectionSubtitle}>
+                Loading your collection...
+              </Text>
+            ) : (
+              <View style={styles.skinGrid}>
+                {ownedSkins.map((skin) => renderSkinCard(skin, true))}
+              </View>
+            )}
           </View>
 
           {/* DISCOVER */}
@@ -362,7 +608,11 @@ export default function ShopScreen() {
               </View>
             </View>
 
-            {discoverSkins.length > 0 ? (
+            {shopLoading ? (
+              <Text style={styles.sectionSubtitle}>
+                Loading available skins...
+              </Text>
+            ) : discoverSkins.length > 0 ? (
               <View style={styles.skinGrid}>
                 {discoverSkins.map((skin) => renderSkinCard(skin, false))}
               </View>
@@ -405,6 +655,10 @@ export default function ShopScreen() {
     </View>
   );
 }
+
+// --------------------------------------------------
+// STYLES
+// --------------------------------------------------
 
 const styles = StyleSheet.create({
   screen: {

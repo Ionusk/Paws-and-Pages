@@ -47,7 +47,7 @@ export default function HomeScreen() {
   const { balance, loading: walletLoading } = usePawWallet();
   return (
     <SafeAreaView style={styles.safeArea}>
-      <StatusBar barStyle="dark-content" backgroundColor={COLORS.background} />
+      <StatusBar barStyle="dark-content" />
 
       <ScrollView
         style={styles.container}

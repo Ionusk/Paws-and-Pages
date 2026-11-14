@@ -1,4 +1,3 @@
-
 import { router } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -24,13 +23,8 @@ const SESSION_DURATION = 4 * 60 * 60 * 1000;
 const LOGIN_TIME_KEY = "paws_pages_login_time";
 
 export default function LoginScreen() {
-  const {
-    authorize,
-    user,
-    isLoading,
-    clearSession,
-    getCredentials,
-  } = useAuth0();
+  const { authorize, user, isLoading, clearSession, getCredentials } =
+    useAuth0();
 
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
@@ -75,10 +69,7 @@ export default function LoginScreen() {
           if (!savedLoginTime) {
             savedLoginTime = Date.now().toString();
 
-            localStorage.setItem(
-              LOGIN_TIME_KEY,
-              savedLoginTime
-            );
+            localStorage.setItem(LOGIN_TIME_KEY, savedLoginTime);
           }
 
           const loginTime = Number(savedLoginTime);
@@ -88,9 +79,7 @@ export default function LoginScreen() {
             localStorage.removeItem(LOGIN_TIME_KEY);
             syncedUserRef.current = null;
 
-            await clearSession({
-              openUrl: true,
-            });
+            await clearSession();
 
             return;
           }
@@ -101,9 +90,7 @@ export default function LoginScreen() {
             localStorage.removeItem(LOGIN_TIME_KEY);
             syncedUserRef.current = null;
 
-            clearSession({
-              openUrl: true,
-            });
+            clearSession();
           }, remainingTime);
         }
 
@@ -120,18 +107,12 @@ export default function LoginScreen() {
 
         console.log("PASUL 1: Solicit token de la Auth0...");
 
-        const credentials = await getCredentials(
-          AUTH_SCOPE,
-          0,
-          {
-            audience: API_AUDIENCE,
-          }
-        );
+        const credentials = await getCredentials(AUTH_SCOPE, 0, {
+          audience: API_AUDIENCE,
+        });
 
         if (!credentials.accessToken) {
-          throw new Error(
-            "Auth0 nu a returnat un access token."
-          );
+          throw new Error("Auth0 nu a returnat un access token.");
         }
 
         console.log("PASUL 2: Token Auth0 primit.");
@@ -146,28 +127,22 @@ export default function LoginScreen() {
 
         console.log(
           "PASUL 3: Trimit utilizatorul către:",
-          `${API_URL}/api/auth/sync`
-        );
-
-        const response = await fetch(
           `${API_URL}/api/auth/sync`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${credentials.accessToken}`,
-            },
-            body: JSON.stringify({
-              email: user.email || null,
-              name: user.name || user.nickname || null,
-            }),
-          }
         );
 
-        console.log(
-          "PASUL 4: Backend status:",
-          response.status
-        );
+        const response = await fetch(`${API_URL}/api/auth/sync`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${credentials.accessToken}`,
+          },
+          body: JSON.stringify({
+            email: user.email || null,
+            name: user.name || user.nickname || null,
+          }),
+        });
+
+        console.log("PASUL 4: Backend status:", response.status);
 
         if (cancelled) return;
 
@@ -182,49 +157,36 @@ export default function LoginScreen() {
         let data: any;
 
         try {
-          data = responseText
-            ? JSON.parse(responseText)
-            : {};
+          data = responseText ? JSON.parse(responseText) : {};
         } catch {
           throw new Error(
-            `Backend-ul a returnat un răspuns invalid: ${responseText.slice(0, 200)}`
+            `Backend-ul a returnat un răspuns invalid: ${responseText.slice(0, 200)}`,
           );
         }
 
         console.log("PASUL 5: Răspuns backend:", data);
 
         if (!response.ok) {
-          throw new Error(
-            data.error || `Backend error: ${response.status}`
-          );
+          throw new Error(data.error || `Backend error: ${response.status}`);
         }
 
         if (!data.success) {
-          throw new Error(
-            "TigerData nu a confirmat salvarea utilizatorului."
-          );
+          throw new Error("TigerData nu a confirmat salvarea utilizatorului.");
         }
 
         // ---------------------------------------------
         // SINCRONIZARE REUȘITĂ
         // ---------------------------------------------
 
-        console.log(
-          "Utilizator sincronizat cu TigerData:",
-          data.user
-        );
+        console.log("Utilizator sincronizat cu TigerData:", data.user);
 
         syncedUserRef.current = auth0Id;
 
         if (!cancelled) {
           router.replace("/home");
         }
-
       } catch (error) {
-        console.error(
-          `Eroare la pasul: ${currentStep}`,
-          error
-        );
+        console.error(`Eroare la pasul: ${currentStep}`, error);
 
         syncedUserRef.current = null;
 
@@ -232,10 +194,9 @@ export default function LoginScreen() {
           setErrorMessage(
             error instanceof Error
               ? `${currentStep}: ${error.message}`
-              : "Nu am putut conecta contul la baza de date."
+              : "Nu am putut conecta contul la baza de date.",
           );
         }
-
       } finally {
         if (!cancelled) {
           setLoading(false);
@@ -277,14 +238,13 @@ export default function LoginScreen() {
           customScheme: CUSTOM_SCHEME,
         });
       }
-
     } catch (error) {
       console.error("Login error:", error);
 
       setErrorMessage(
         error instanceof Error
           ? error.message
-          : "Login could not be completed."
+          : "Login could not be completed.",
       );
 
       setLoading(false);
@@ -317,14 +277,13 @@ export default function LoginScreen() {
           customScheme: CUSTOM_SCHEME,
         });
       }
-
     } catch (error) {
       console.error("Signup error:", error);
 
       setErrorMessage(
         error instanceof Error
           ? error.message
-          : "Account creation could not be completed."
+          : "Account creation could not be completed.",
       );
 
       setLoading(false);
@@ -338,14 +297,9 @@ export default function LoginScreen() {
   if (isLoading || loading) {
     return (
       <SafeAreaView style={styles.loadingContainer}>
-        <ActivityIndicator
-          size="large"
-          color="#D69BA5"
-        />
+        <ActivityIndicator size="large" color="#D69BA5" />
 
-        <Text style={styles.loadingText}>
-          Getting your paws ready...
-        </Text>
+        <Text style={styles.loadingText}>Getting your paws ready...</Text>
       </SafeAreaView>
     );
   }
@@ -357,23 +311,18 @@ export default function LoginScreen() {
   return (
     <SafeAreaView style={styles.safe}>
       <View style={styles.container}>
-
         {/* BACK BUTTON */}
         <TouchableOpacity
           onPress={() => router.back()}
           style={styles.backButton}
           activeOpacity={0.7}
         >
-          <Text style={styles.backText}>
-            ← Back
-          </Text>
+          <Text style={styles.backText}>← Back</Text>
         </TouchableOpacity>
 
         {/* HEADER */}
         <View style={styles.header}>
-          <Text style={styles.logo}>
-            PAWS & PAGES
-          </Text>
+          <Text style={styles.logo}>PAWS & PAGES</Text>
 
           <Text style={styles.subtitle}>
             Your little corner of reading and learning ♡
@@ -382,32 +331,20 @@ export default function LoginScreen() {
 
         {/* MAIN CONTENT */}
         <View style={styles.mainContent}>
-
           {/* LOGIN BUTTON - LEFT */}
           <TouchableOpacity
-            style={[
-              styles.actionButton,
-              styles.loginButton,
-            ]}
+            style={[styles.actionButton, styles.loginButton]}
             onPress={handleLogin}
             activeOpacity={0.85}
             disabled={loading}
           >
-            <Text style={styles.buttonIcon}>
-              ♡
-            </Text>
+            <Text style={styles.buttonIcon}>♡</Text>
 
-            <Text style={styles.buttonTitle}>
-              Log in
-            </Text>
+            <Text style={styles.buttonTitle}>Log in</Text>
 
-            <Text style={styles.buttonDescription}>
-              Welcome back!
-            </Text>
+            <Text style={styles.buttonDescription}>Welcome back!</Text>
 
-            <Text style={styles.buttonArrow}>
-              →
-            </Text>
+            <Text style={styles.buttonArrow}>→</Text>
           </TouchableOpacity>
 
           {/* LAICA - CENTER */}
@@ -417,51 +354,34 @@ export default function LoginScreen() {
 
           {/* SIGNUP BUTTON - RIGHT */}
           <TouchableOpacity
-            style={[
-              styles.actionButton,
-              styles.signupButton,
-            ]}
+            style={[styles.actionButton, styles.signupButton]}
             onPress={handleSignup}
             activeOpacity={0.85}
             disabled={loading}
           >
-            <Text style={styles.buttonIcon}>
-              ✧
-            </Text>
+            <Text style={styles.buttonIcon}>✧</Text>
 
-            <Text style={styles.buttonTitle}>
-              Create an account
-            </Text>
+            <Text style={styles.buttonTitle}>Create an account</Text>
 
-            <Text style={styles.buttonDescription}>
-              Join our little world!
-            </Text>
+            <Text style={styles.buttonDescription}>Join our little world!</Text>
 
-            <Text style={styles.buttonArrow}>
-              →
-            </Text>
+            <Text style={styles.buttonArrow}>→</Text>
           </TouchableOpacity>
-
         </View>
 
         {/* ERROR */}
         {errorMessage !== "" && (
-          <Text style={styles.error}>
-            {errorMessage}
-          </Text>
+          <Text style={styles.error}>{errorMessage}</Text>
         )}
 
         {/* FOOTER */}
         <View style={styles.footer}>
-          <Text style={styles.footerPaw}>
-            🐾
-          </Text>
+          <Text style={styles.footerPaw}>🐾</Text>
 
           <Text style={styles.footerText}>
             A safe little space for big adventures ♡
           </Text>
         </View>
-
       </View>
     </SafeAreaView>
   );

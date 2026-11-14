@@ -7,8 +7,9 @@ import JSZip from "jszip";
 import mammoth from "mammoth";
 import multer from "multer";
 import sharp from "sharp";
-import { pool } from "./db.js";
 
+import { pool } from "./db.js";
+import { createShopRouter } from "./shop.js";
 import { getOrCreateUserWallet, getPawBalance } from "./solana.js";
 
 dotenv.config();
@@ -32,10 +33,6 @@ const PRIMARY_MODEL = process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
 
 const FALLBACK_MODEL = process.env.GEMINI_FALLBACK_MODEL || "gemini-3.8-flash";
 
-const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY,
-});
-
 // --------------------------------------------------
 // AUTH0
 // --------------------------------------------------
@@ -51,6 +48,16 @@ const requireAuth = auth({
 
 app.use(cors());
 app.use(express.json());
+
+// --------------------------------------------------
+// SHOP - SOLANA PAW TOKEN
+// --------------------------------------------------
+
+app.use("/api/shop", createShopRouter({ requireAuth }));
+
+const ai = new GoogleGenAI({
+  apiKey: process.env.GEMINI_API_KEY,
+});
 
 // --------------------------------------------------
 // FILE UPLOAD
