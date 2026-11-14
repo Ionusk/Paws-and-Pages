@@ -7,11 +7,16 @@
     "dev": "nodemon index.js"
   },
   "dependencies": {
+    "@coinbase/cdp-sdk": "^1.62.0",
     "@elevenlabs/elevenlabs-js": "^2.77.0",
     "@google/genai": "latest",
+    "@metaplex-foundation/mpl-token-metadata": "^2.13.0",
+    "@solana/spl-token": "^0.4.15",
+    "@solana/web3.js": "^1.99.0",
     "cors": "latest",
     "dotenv": "latest",
     "express": "latest",
+    "express-oauth2-jwt-bearer": "^1.11.0",
     "jszip": "latest",
     "mammoth": "latest",
     "multer": "latest",

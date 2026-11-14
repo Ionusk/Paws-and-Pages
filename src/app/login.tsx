@@ -94,9 +94,7 @@ export default function LoginScreen() {
             localStorage.removeItem(LOGIN_TIME_KEY);
             syncedUserRef.current = null;
 
-            await clearSession({
-              openUrl: true,
-            });
+            await clearSession();
 
             return;
           }
@@ -107,9 +105,7 @@ export default function LoginScreen() {
             localStorage.removeItem(LOGIN_TIME_KEY);
             syncedUserRef.current = null;
 
-            clearSession({
-              openUrl: true,
-            });
+            clearSession();
           }, remainingTime);
         }
 
@@ -223,14 +219,8 @@ export default function LoginScreen() {
         syncedUserRef.current = auth0Id;
 
         if (!cancelled) {
-  console.log("ÎNAINTE DE NAVIGARE:", window.location.href);
-
-  router.replace("/home");
-
-  setTimeout(() => {
-    console.log("DUPĂ NAVIGARE:", window.location.href);
-  }, 1000);
-}
+          router.replace("/home");
+        }
       } catch (error) {
         console.error(
           `Eroare la pasul: ${currentStep}`,

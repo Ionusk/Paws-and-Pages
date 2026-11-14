@@ -9,6 +9,8 @@ import sharp from "sharp";
 import { GoogleGenAI } from "@google/genai";
 import { auth } from "express-oauth2-jwt-bearer";
 import { pool } from "./db.js";
+import { createShopRouter } from "./shop.js";
+import { getOrCreateUserWallet, getPawBalance } from "./solana.js";
 
 dotenv.config();
 
@@ -43,6 +45,12 @@ const requireAuth = auth({
   issuerBaseURL: `https://${process.env.AUTH0_DOMAIN}/`,
   audience: process.env.AUTH0_AUDIENCE,
 });
+
+// =========================================================
+// SHOP - SOLANA PAW TOKEN
+// =========================================================
+
+app.use("/api/shop", createShopRouter({ requireAuth }));
 
 // =========================================================
 // GEMINI CONFIGURATION
@@ -1043,15 +1051,33 @@ app.post(
         [auth0Id, email, name]
       );
 
+      const user = userResult.rows[0];
+
       console.log(
         "Utilizator sincronizat cu TigerData:",
-        userResult.rows[0].id
+        user.id
       );
+
+      // CREATE / RETRIEVE SOLANA WALLET
+      const walletAddress = await getOrCreateUserWallet(user.id);
+
+      // READ REAL PAW BALANCE FROM SOLANA
+      const pawBalance = await getPawBalance(walletAddress);
+
+      console.log("Wallet Solana:", walletAddress);
+      console.log("Sold PAW:", pawBalance);
 
       return res.json({
         success: true,
         message: "Utilizator sincronizat cu TigerData!",
-        user: userResult.rows[0],
+        user: {
+          ...user,
+          solana_wallet_address: walletAddress,
+        },
+        wallet: {
+          address: walletAddress,
+          pawBalance,
+        },
       });
     } catch (error) {
       console.error(
@@ -1061,11 +1087,66 @@ app.post(
 
       return res.status(500).json({
         error:
-          "Nu am putut salva utilizatorul în TigerData.",
+          "Nu am putut sincroniza utilizatorul sau wallet-ul Solana.",
       });
     }
   }
 );
+
+// =========================================================
+// SOLANA WALLET - GET BALANCE
+// =========================================================
+
+app.get("/api/wallet", requireAuth, async (req, res) => {
+  try {
+    const auth0Id = req.auth?.payload?.sub;
+
+    if (!auth0Id) {
+      return res.status(401).json({
+        error: "Utilizator neautentificat.",
+      });
+    }
+
+    // IDENTIFY AUTHENTICATED USER
+    const userResult = await pool.query(
+      `
+        SELECT id
+        FROM users
+        WHERE auth0_id = $1
+        LIMIT 1
+        `,
+      [auth0Id]
+    );
+
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({
+        error: "Utilizatorul nu există.",
+      });
+    }
+
+    const userId = userResult.rows[0].id;
+
+    // GET EXISTING WALLET OR CREATE IT
+    const walletAddress = await getOrCreateUserWallet(userId);
+
+    // READ CURRENT ON-CHAIN BALANCE
+    const pawBalance = await getPawBalance(walletAddress);
+
+    return res.json({
+      success: true,
+      wallet: {
+        address: walletAddress,
+        pawBalance,
+      },
+    });
+  } catch (error) {
+    console.error("Eroare la citirea wallet-ului Solana:", error);
+
+    return res.status(500).json({
+      error: "Nu am putut obține soldul PAW.",
+    });
+  }
+});
 
 // =========================================================
 // ELEVENLABS – VOICE TUTOR

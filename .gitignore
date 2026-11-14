@@ -44,3 +44,6 @@ example
 
 server/.env
 server/node_modules/
+
+# env files with secrets
+.env
