@@ -7,7 +7,7 @@ import React, {
 } from 'react';
 import { useAuth0 } from 'react-native-auth0';
 
-import { SKIN_VIDEOS, type MascotAnimation } from '@/constants/skins';
+import { skinVideoFor, type MascotAnimation } from '@/constants/skins';
 import { canPlaySkinVideos } from '@/components/SkinVideo';
 import { API_AUDIENCE, API_URL } from '@/lib/voiceConversations';
 
@@ -89,7 +89,7 @@ export function useSkinVideo(animation: MascotAnimation) {
 
   if (!equippedSkinId || !canPlaySkinVideos) return null;
 
-  const source = SKIN_VIDEOS[equippedSkinId]?.[animation];
+  const source = skinVideoFor(equippedSkinId, animation);
 
   return source ? { key: `${equippedSkinId}-${animation}`, source } : null;
 }

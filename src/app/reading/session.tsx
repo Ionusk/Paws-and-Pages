@@ -548,7 +548,10 @@ export default function ReadingSessionScreen() {
                 style={[styles.mascotCard, isWideLayout ? styles.wideCard : styles.mobileCard]}
               >
                 <View style={styles.videoContainer}>
-                  <AnimatedMascot animation="original" size={width < 400 ? 240 : 300} />
+                  <AnimatedMascot
+                    animation={phase === 'reading' ? 'reading' : 'original'}
+                    size={width < 400 ? 240 : 300}
+                  />
                 </View>
 
                 <Text style={styles.mascotTitle}>

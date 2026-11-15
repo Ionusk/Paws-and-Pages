@@ -19,6 +19,9 @@ const clips = {
   sleepy: {
     stacked: require('../../assets/video/laicasleepy-android.mp4'),
   },
+  reading: {
+    stacked: require('../../assets/video/laicaoriginal-android.mp4'),
+  },
 };
 
 export function AnimatedMascot({ animation, size = 300 }: AnimatedMascotProps) {

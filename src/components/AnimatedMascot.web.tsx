@@ -14,6 +14,7 @@ type AnimatedMascotProps = {
 const videos = {
   original: require('../../assets/video/laicaoriginal.webm'),
   sleepy: require('../../assets/video/laicasleepy.webm'),
+  reading: require('../../assets/video/laicaoriginal.webm'),
 };
 
 export function AnimatedMascot({ animation, size = 300 }: AnimatedMascotProps) {

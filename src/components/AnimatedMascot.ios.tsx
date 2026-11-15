@@ -1,7 +1,9 @@
 import { useVideoPlayer, VideoView } from 'expo-video';
 
+import type { MascotAnimation } from '@/constants/skins';
+
 type AnimatedMascotProps = {
-  animation: 'original' | 'sleepy';
+  animation: MascotAnimation;
   /** Width and height in points. Defaults to 300. */
   size?: number;
 };
@@ -9,6 +11,7 @@ type AnimatedMascotProps = {
 const videos = {
   original: require('../../assets/video/laicaoriginal-ios.mov'),
   sleepy: require('../../assets/video/laicasleepy-ios.mov'),
+  reading: require('../../assets/video/laicaoriginal-ios.mov'),
 };
 
 export function AnimatedMascot({ animation, size = 300 }: AnimatedMascotProps) {
