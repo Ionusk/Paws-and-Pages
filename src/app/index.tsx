@@ -16,7 +16,7 @@ import {
     Pencil,
     Sparkles,
 } from 'lucide-react-native';
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import {
     ActivityIndicator,
     Platform,
@@ -54,26 +54,19 @@ export default function WelcomeScreen() {
   const [buttonHovered, setButtonHovered] = useState(false);
 
   const { user, isLoading, clearSession } = useAuth0();
+  const hasUser = Boolean(user);
   const { user: profileUser } = useProfile();
   const [leaving, setLeaving] = useState(false);
   const [redirecting, setRedirecting] = useState(false);
+  // Read the "just logged in" flag once per visit. The effect below can run
+  // several times (Auth0 refreshes `user` when a token is requested), and a
+  // re-run must not mistake the login return for a normal visit.
+  const loginReturnRef = useRef<boolean | null>(null);
+  if (loginReturnRef.current === null) {
+    loginReturnRef.current = consumeLoginReturn();
+  }
 
-  // On web, Auth0 sends the browser back to "/" right after login. In that
-  // case continue to /login, which syncs the account and opens /home.
-  useFocusEffect(
-    useCallback(() => {
-      if (isLoading || !user) {
-        return;
-      }
-
-      if (consumeLoginReturn()) {
-        setRedirecting(true);
-        router.replace('/login');
-      }
-    }, [isLoading, user, router])
-  );
-
-  const handleLogout = async () => {
+  const handleLogout = useCallback(async () => {
     try {
       setLeaving(true);
       clearLoginTime();
@@ -87,9 +80,28 @@ export default function WelcomeScreen() {
     } finally {
       setLeaving(false);
     }
-  };
+  }, [clearSession]);
 
-  if (isLoading || leaving || redirecting) {
+  // Every time this screen is shown while logged in, log the user out.
+  // Exception: on web, Auth0 sends the browser back to "/" right after
+  // login; then continue to /login, which syncs the account and opens /home.
+  useFocusEffect(
+    useCallback(() => {
+      if (isLoading || !hasUser) {
+        return;
+      }
+
+      if (loginReturnRef.current) {
+        setRedirecting(true);
+        router.replace('/login');
+        return;
+      }
+
+      handleLogout();
+    }, [isLoading, hasUser, router, handleLogout])
+  );
+
+  if (isLoading || leaving || redirecting || (hasUser && Platform.OS === 'web')) {
     return (
       <SafeAreaView style={[styles.safeArea, styles.loading]}>
         <ActivityIndicator size="large" color="#927BA0" />

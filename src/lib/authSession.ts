@@ -14,6 +14,9 @@ const POST_LOGIN_KEY = 'paws_pages_post_login';
 export function markLoginStarted() {
   if (Platform.OS === 'web') {
     sessionStorage.setItem(POST_LOGIN_KEY, '1');
+    // A new login starts a new 4-hour session. Without this, a login time
+    // left over from an old session would log the user out right away.
+    localStorage.removeItem(LOGIN_TIME_KEY);
   }
 }
 

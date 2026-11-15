@@ -1,4 +1,5 @@
-import { router, type Href } from "expo-router";
+import { router, useFocusEffect, type Href } from "expo-router";
+import { useCallback, useState } from "react";
 import {
     ArrowLeft,
     ArrowRight,
@@ -15,6 +16,7 @@ import {
     Trophy,
 } from "lucide-react-native";
 import {
+    ActivityIndicator,
     Pressable,
     SafeAreaView,
     ScrollView,
@@ -28,6 +30,7 @@ import {
 import { Notice } from "@/components/ui/feedback";
 import { COMPACT_BREAKPOINT } from "@/constants/palette";
 import { useProgressStats } from "@/hooks/useProgressStats";
+import { getErrorMessage, useApi } from "@/lib/api";
 import { goBack } from "@/lib/navigation";
 import type { ReadingBook, ReadingSessionRecord } from "@/lib/readingApi";
 import { usePawWallet } from "../hooks/usePawWallet";
@@ -52,6 +55,17 @@ type QuestData = {
   sessions: ReadingSessionRecord[];
 };
 
+type ClaimStatus = "pending" | "submitted" | "confirmed" | null;
+
+/** Progress and reward state computed by the server from TigerData. */
+type ServerQuest = {
+  id: string;
+  reward: number;
+  target: number;
+  progress: number;
+  claimStatus: ClaimStatus;
+};
+
 type Quest = {
   id: string;
   title: string;
@@ -63,7 +77,10 @@ type Quest = {
   icon: typeof BookOpen;
   color: string;
   iconColor: string;
-  /** Returns current progress, or null when it can't be tracked yet. */
+  /**
+   * Client-side estimate, used only until the server answers. The server
+   * (GET /api/quests) is the source of truth and decides the PAW rewards.
+   */
   measure: ((data: QuestData) => number) | null;
   unavailableReason?: string;
   action?: { label: string; route: Href };
@@ -127,16 +144,19 @@ const dailyQuests: Quest[] = [
   {
     id: "review",
     title: "Share your thoughts",
-    description: "Write a review for a book.",
+    description: "Write your impressions after a reading session today.",
     reward: 20,
     target: 1,
-    unit: "review",
+    unit: "session",
     category: "COMMUNITY",
     icon: PenLine,
     color: COLORS.peach,
     iconColor: "#A77C6C",
-    measure: null,
-    unavailableReason: "Book reviews can't be saved yet.",
+    measure: ({ sessions }) =>
+      sessions.filter(
+        (session) => isToday(session.date) && session.impressions?.trim(),
+      ).length,
+    action: { label: "Start a reading session", route: "/reading/session" },
   },
 ];
 
@@ -174,23 +194,31 @@ const weeklyQuests: Quest[] = [
     icon: Trophy,
     color: COLORS.peach,
     iconColor: "#A77C6C",
-    measure: null,
-    unavailableReason:
-      "Updating your current page isn't possible yet, so finished books can't be tracked.",
+    measure: ({ books }) => {
+      const weekStart = startOfWeek().getTime();
+      return books.filter(
+        (book) =>
+          book.status === "finished" &&
+          book.finishedAt &&
+          new Date(book.finishedAt).getTime() >= weekStart,
+      ).length;
+    },
+    action: { label: "Go to my books", route: "/reading" },
   },
   {
     id: "study",
     title: "Curious minds",
-    description: "Complete 3 study sessions this week.",
+    description: "Complete 3 practice quizzes this week.",
     reward: 45,
     target: 3,
-    unit: "sessions",
+    unit: "quizzes",
     category: "LEARNING",
     icon: GraduationCap,
     color: COLORS.lavender,
     iconColor: COLORS.purple,
+    // Quiz results live only on the server, so progress comes from there.
     measure: null,
-    unavailableReason: "Study sessions aren't tracked by date yet.",
+    action: { label: "Practice", route: "/study/practice" },
   },
 ];
 
@@ -198,15 +226,32 @@ function QuestCard({
   quest,
   data,
   loading,
+  server,
+  claiming,
+  claimDisabled,
+  onClaim,
 }: {
   quest: Quest;
   data: QuestData | null;
   loading: boolean;
+  server: ServerQuest | undefined;
+  claiming: boolean;
+  claimDisabled: boolean;
+  onClaim: () => void;
 }) {
   const Icon = quest.icon;
-  const unavailable = quest.measure === null;
-  const value =
-    !unavailable && data && quest.measure ? quest.measure(data) : null;
+  const unavailable = Boolean(quest.unavailableReason);
+  // Server progress wins; the local estimate only fills the gap while loading.
+  const value = unavailable
+    ? null
+    : server
+      ? server.progress
+      : data && quest.measure
+        ? quest.measure(data)
+        : null;
+  const claimStatus = server?.claimStatus ?? null;
+  const claimed = claimStatus === "confirmed";
+  const confirming = claimStatus === "pending" || claimStatus === "submitted";
   const progress = value !== null ? Math.min(value / quest.target, 1) : 0;
   const completed = value !== null && value >= quest.target;
 
@@ -293,9 +338,37 @@ function QuestCard({
           </Text>
         </View>
 
-        {completed ? (
-          <Text style={styles.rewardCaption}>Reward payouts coming soon</Text>
-        ) : !unavailable && quest.action ? (
+        {claimed ? (
+          <View style={styles.claimedPill}>
+            <Check size={13} color="#71866F" />
+            <Text style={styles.claimedText}>+{quest.reward} PAW received</Text>
+          </View>
+        ) : completed && server ? (
+          <Pressable
+            onPress={onClaim}
+            disabled={claimDisabled}
+            style={({ pressed }) => [
+              styles.claimButton,
+              (pressed || claiming || claimDisabled) && styles.pressed,
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel={`Claim ${quest.reward} PAW for ${quest.title}`}
+            accessibilityState={{ disabled: claimDisabled, busy: claiming }}
+          >
+            {claiming ? (
+              <ActivityIndicator size="small" color={COLORS.white} />
+            ) : (
+              <Coins size={14} color={COLORS.white} />
+            )}
+            <Text style={styles.claimButtonText}>
+              {claiming
+                ? "Sending..."
+                : confirming
+                  ? "Check reward"
+                  : `Claim ${quest.reward} PAW`}
+            </Text>
+          </Pressable>
+        ) : !completed && !unavailable && quest.action ? (
           <Pressable
             onPress={() => router.push(quest.action!.route)}
             style={({ pressed }) => [styles.questAction, pressed && styles.pressed]}
@@ -314,11 +387,104 @@ export default function QuestsScreen() {
   const { width } = useWindowDimensions();
   const isCompact = width < COMPACT_BREAKPOINT;
 
-  const { balance, loading: walletLoading } = usePawWallet();
+  const {
+    balance,
+    loading: walletLoading,
+    refreshWallet,
+  } = usePawWallet();
   const displayedBalance = walletLoading ? "..." : (balance ?? "—");
 
   const { stats, loading: statsLoading, error: statsError, refresh } =
     useProgressStats();
+
+  // ------------------------------------------------
+  // SERVER PROGRESS + PAW REWARDS (server/quests.js)
+  // ------------------------------------------------
+
+  const { fetchRaw, request } = useApi();
+  const [serverQuests, setServerQuests] = useState<ServerQuest[]>([]);
+  const [claimingId, setClaimingId] = useState<string | null>(null);
+  const [claimNotice, setClaimNotice] = useState<{
+    tone: "success" | "error" | "info";
+    message: string;
+  } | null>(null);
+
+  const loadServerQuests = useCallback(async () => {
+    try {
+      const data = await request<{ quests: ServerQuest[] }>("/api/quests");
+      setServerQuests(data.quests ?? []);
+    } catch (error) {
+      console.error("Quests loading error:", error);
+      setClaimNotice({
+        tone: "error",
+        message: getErrorMessage(error, "We couldn't load your quest rewards."),
+      });
+    }
+  }, [request]);
+
+  // Reload whenever the screen is shown, so new activity counts right away.
+  useFocusEffect(
+    useCallback(() => {
+      loadServerQuests();
+    }, [loadServerQuests]),
+  );
+
+  const handleClaim = async (quest: Quest) => {
+    if (claimingId) return;
+
+    try {
+      setClaimingId(quest.id);
+      setClaimNotice({
+        tone: "info",
+        message: `Sending ${quest.reward} PAW to your wallet on Solana...`,
+      });
+
+      const { ok, status, data } = await fetchRaw<{
+        success?: boolean;
+        error?: string;
+        pendingConfirmation?: boolean;
+      }>(`/api/quests/${encodeURIComponent(quest.id)}/claim`, {
+        method: "POST",
+      });
+
+      if (status === 202 || data.pendingConfirmation) {
+        setClaimNotice({
+          tone: "info",
+          message: data.error || "Your reward is still being confirmed.",
+        });
+      } else if (!ok || !data.success) {
+        throw new Error(data.error || "We couldn't send your reward.");
+      } else {
+        setClaimNotice({
+          tone: "success",
+          message: `+${quest.reward} PAW are now in your wallet!`,
+        });
+      }
+
+      await Promise.all([loadServerQuests(), refreshWallet()]);
+    } catch (error) {
+      console.error("Quest claim error:", error);
+      setClaimNotice({
+        tone: "error",
+        message: getErrorMessage(error, "We couldn't send your reward."),
+      });
+    } finally {
+      setClaimingId(null);
+    }
+  };
+
+  const renderQuest = (quest: Quest) => (
+    <QuestCard
+      key={quest.id}
+      quest={quest}
+      data={questData}
+      loading={statsLoading}
+      server={serverQuests.find((q) => q.id === quest.id)}
+      claiming={claimingId === quest.id}
+      claimDisabled={claimingId !== null}
+      onClaim={() => handleClaim(quest)}
+    />
+  );
   const questData: QuestData | null = stats
     ? { books: stats.books, sessions: stats.sessions }
     : null;
@@ -410,6 +576,15 @@ export default function QuestsScreen() {
           </View>
         </View>
 
+        {claimNotice ? (
+          <Notice
+            tone={claimNotice.tone}
+            message={claimNotice.message}
+            onDismiss={() => setClaimNotice(null)}
+            style={styles.statsNotice}
+          />
+        ) : null}
+
         {statsError ? (
           <Notice
             tone="error"
@@ -421,14 +596,7 @@ export default function QuestsScreen() {
         ) : null}
 
         <View style={styles.questList}>
-          {dailyQuests.map((quest) => (
-            <QuestCard
-              key={quest.id}
-              quest={quest}
-              data={questData}
-              loading={statsLoading}
-            />
-          ))}
+          {dailyQuests.map(renderQuest)}
         </View>
 
         {/* WEEKLY SECTION */}
@@ -451,14 +619,7 @@ export default function QuestsScreen() {
         </View>
 
         <View style={styles.questList}>
-          {weeklyQuests.map((quest) => (
-            <QuestCard
-              key={quest.id}
-              quest={quest}
-              data={questData}
-              loading={statsLoading}
-            />
-          ))}
+          {weeklyQuests.map(renderQuest)}
         </View>
 
         {/* BOTTOM NOTE */}
@@ -469,9 +630,7 @@ export default function QuestsScreen() {
           <View style={styles.infoTextContainer}>
             <Text style={styles.infoTitle}>Your effort deserves a reward.</Text>
             <Text style={styles.infoDescription}>
-              Quest rewards aren’t paid out yet: completing a quest doesn’t add
-              PAW to your wallet for now. When payouts arrive, they’ll be sent
-              and verified on Solana.
+              Finish a quest and tap Claim: the PAW are minted to your wallet on Solana Devnet and you can spend them in Laica's Shop.
             </Text>
           </View>
         </View>
@@ -807,6 +966,34 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontFamily: "Nunito_700Bold",
     color: COLORS.muted,
+  },
+  claimButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: COLORS.darkPink,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 14,
+  },
+  claimButtonText: {
+    fontSize: 11,
+    fontFamily: "Nunito_800ExtraBold",
+    color: COLORS.white,
+  },
+  claimedPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    backgroundColor: COLORS.sage,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 14,
+  },
+  claimedText: {
+    fontSize: 10,
+    fontFamily: "Nunito_800ExtraBold",
+    color: "#71866F",
   },
   rewardCaption: {
     fontSize: 10,

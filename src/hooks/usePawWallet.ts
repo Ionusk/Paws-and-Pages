@@ -1,7 +1,7 @@
 import { useFocusEffect } from "expo-router";
 import { useCallback, useState } from "react";
 
-import { getErrorMessage, useApi } from "@/lib/api";
+import { ApiError, getErrorMessage, useApi } from "@/lib/api";
 
 type PawWallet = {
   address: string;
@@ -38,6 +38,13 @@ export function usePawWallet() {
         pawBalance: String(data.wallet.pawBalance),
       });
     } catch (err) {
+      // The server runs without Solana keys: not an error, just no wallet.
+      if (err instanceof ApiError && err.data?.code === "solana_not_configured") {
+        setWallet(null);
+        setError(err.message);
+        return;
+      }
+
       console.error("Wallet error:", err);
 
       // Never keep showing an old balance as if it were current.

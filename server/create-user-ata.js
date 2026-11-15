@@ -10,7 +10,11 @@ import { pool } from "./db.js";
 const cdp = new CdpClient();
 const connection = new Connection("https://api.devnet.solana.com", "confirmed");
 
-const USER_ID = 23;
+// Usage: node <script> [userId]   (default: 23)
+const USER_ID = Number(process.argv[2] ?? 23);
+if (!Number.isInteger(USER_ID) || USER_ID <= 0) {
+  throw new Error("userId invalid.");
+}
 const TREASURY_NAME = "paws-and-pages-devnet-test";
 
 async function main() {

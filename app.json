@@ -42,6 +42,13 @@
         {
           "microphonePermission": "Paws & Pages uses the microphone so you can talk with Laica, your study buddy."
         }
+      ],
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Paws & Pages uses the microphone so you can talk with Laica, your study buddy.",
+          "enableBackgroundPlayback": false
+        }
       ]
     ],
     "experiments": {

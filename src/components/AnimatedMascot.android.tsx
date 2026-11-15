@@ -1,7 +1,11 @@
 import { MaskoView } from '@masko/player-react-native';
 
+import type { MascotAnimation } from '@/constants/skins';
+import { useSkinVideo } from './SkinProvider';
+import { SkinVideo } from './SkinVideo';
+
 type AnimatedMascotProps = {
-  animation: 'original' | 'sleepy';
+  animation: MascotAnimation;
   /** Width and height in points. Defaults to 300. */
   size?: number;
 };
@@ -18,6 +22,19 @@ const clips = {
 };
 
 export function AnimatedMascot({ animation, size = 300 }: AnimatedMascotProps) {
+  // Equipped shop skin (Hogwarts, Graduation...) replaces the classic look.
+  const skinVideo = useSkinVideo(animation);
+
+  if (skinVideo) {
+    return (
+      <SkinVideo
+        key={skinVideo.key}
+        source={skinVideo.source}
+        style={{ width: size, height: size }}
+      />
+    );
+  }
+
   return (
     <MaskoView
       style={{ width: size, height: size }}

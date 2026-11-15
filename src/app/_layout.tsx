@@ -7,6 +7,7 @@ import * as SplashScreen from "expo-splash-screen";
 import { useEffect, useState } from "react";
 import { ActivityIndicator, Platform, Text, View } from "react-native";
 import { Auth0Provider, useAuth0 } from "react-native-auth0";
+import { SkinProvider } from "../components/SkinProvider";
 
 import {
     PlayfairDisplay_400Regular,
@@ -61,7 +62,8 @@ const PROTECTED_SCREENS = [
   "account",
   "quests",
   "shop",
-  "friends",
+  "friends/index",
+  "friends/[userId]",
   "explore",
   "tabs",
   "username",
@@ -71,7 +73,8 @@ const PROTECTED_SCREENS = [
   "reading/library",
   "reading/add-book",
   "reading/session",
-  "reading/review",
+  "reading/review/index",
+  "reading/review/[bookId]",
   "study/index",
   "study/upload",
   "study/aisummary",
@@ -79,6 +82,8 @@ const PROTECTED_SCREENS = [
   "study/quiz",
   "study/summary",
   "study/voice",
+  "study/audio",
+  "study/tutor",
   "study/conversations",
   "study/conversation/[id]",
 ];
@@ -227,9 +232,11 @@ export default function RootLayout() {
         : {})}
     >
       <ProfileProvider>
-        <ConversationProvider>
-          <RootNavigator />
-        </ConversationProvider>
+        <SkinProvider>
+          <ConversationProvider>
+            <RootNavigator />
+          </ConversationProvider>
+        </SkinProvider>
       </ProfileProvider>
     </Auth0Provider>
   );

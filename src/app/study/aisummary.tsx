@@ -401,6 +401,34 @@ function SummaryDetails({
               <ChevronRight size={18} color="#79649F" />
             </Pressable>
           )}
+
+          <Pressable
+            style={({ pressed }) => [styles.quizButton, pressed && styles.pressed]}
+            onPress={() =>
+              router.push({
+                pathname: "/study/audio",
+                params: { materialId: String(data.id) },
+              })
+            }
+            accessibilityRole="button"
+          >
+            <Text style={styles.quizButtonText}>Listen to this summary</Text>
+            <ChevronRight size={18} color="#79649F" />
+          </Pressable>
+
+          <Pressable
+            style={({ pressed }) => [styles.quizButton, pressed && styles.pressed]}
+            onPress={() =>
+              router.push({
+                pathname: "/study/tutor",
+                params: { materialId: String(data.id) },
+              })
+            }
+            accessibilityRole="button"
+          >
+            <Text style={styles.quizButtonText}>Ask questions about it</Text>
+            <ChevronRight size={18} color="#79649F" />
+          </Pressable>
         </View>
       </ScrollView>
     </View>

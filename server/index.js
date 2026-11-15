@@ -12,9 +12,11 @@ import { createAuth0Client } from "./auth0Client.js";
 import { createCampusRouter } from "./campus.js";
 import { createAccessService } from "./campusAccess.js";
 import { pool } from "./db.js";
+import { createFriendsRouter } from "./friends.js";
 import { createProfileRouter } from "./profile.js";
-import { createShopRouter } from "./shop.js";
-import { getOrCreateUserWallet, getPawBalance } from "./solana.js";
+import { createQuestsRouter } from "./quests.js";
+import { createReviewsRouter } from "./reviews.js";
+import { createStudyAudioRouter } from "./studyAudio.js";
 
 dotenv.config();
 
@@ -51,10 +53,171 @@ const requireAuth = auth({
 });
 
 // =========================================================
-// SHOP - SOLANA PAW TOKEN
+// QUESTS - progres din TigerData, recompense PAW (Solana)
 // =========================================================
 
-app.use("/api/shop", createShopRouter({ requireAuth }));
+app.use("/api/quests", createQuestsRouter({ requireAuth }));
+
+// =========================================================
+// AUDIO LESSONS + STUDY TUTOR (ElevenLabs)
+// =========================================================
+
+app.use(createStudyAudioRouter({ requireAuth }));
+
+// =========================================================
+// SOLANA (OPTIONAL) - WALLET + SHOP PAW TOKEN
+// =========================================================
+// solana.js și shop.js aruncă o eroare la import dacă lipsesc cheile
+// Solana/CDP din server/.env. Le încărcăm opțional, ca restul aplicației
+// (study, reading, ElevenLabs) să funcționeze și fără ele.
+
+let getOrCreateUserWallet = null;
+let getPawBalance = null;
+let solanaUnavailableReason = null;
+
+try {
+  const solana = await import("./solana.js");
+  const shop = await import("./shop.js");
+
+  getOrCreateUserWallet = solana.getOrCreateUserWallet;
+  getPawBalance = solana.getPawBalance;
+
+  app.use("/api/shop", shop.createShopRouter({ requireAuth }));
+} catch (error) {
+  solanaUnavailableReason = error.message;
+
+  console.warn(
+    "Solana dezactivat (wallet + shop):",
+    solanaUnavailableReason
+  );
+}
+
+const SOLANA_NOT_CONFIGURED = {
+  success: false,
+  code: "solana_not_configured",
+  error:
+    "Wallet-ul PAW nu este configurat pe acest server (lipsesc cheile Solana din server/.env).",
+};
+
+// Fără Solana: catalogul și echiparea funcționează din TigerData,
+// doar cumpărarea (tranzacție PAW) este indisponibilă.
+async function getShopUserId(req) {
+  const auth0Id = req.auth?.payload?.sub;
+
+  if (!auth0Id) {
+    return null;
+  }
+
+  const result = await pool.query(
+    "SELECT id FROM users WHERE auth0_id = $1 LIMIT 1",
+    [auth0Id]
+  );
+
+  return result.rows[0]?.id ?? null;
+}
+
+if (solanaUnavailableReason) {
+  app.get("/api/shop", requireAuth, async (req, res) => {
+    try {
+      const userId = await getShopUserId(req);
+
+      if (!userId) {
+        return res.status(404).json({
+          success: false,
+          error: "Utilizatorul nu există.",
+        });
+      }
+
+      const result = await pool.query(
+        `SELECT
+          s.id,
+          s.name,
+          s.description,
+          s.price,
+          (i.item_id IS NOT NULL) AS owned,
+          COALESCE(i.is_equipped, FALSE) AS equipped
+         FROM shop_items s
+         LEFT JOIN user_inventory i
+           ON i.item_id = s.id AND i.user_id = $1
+         WHERE s.is_active = TRUE
+         ORDER BY s.price ASC`,
+        [userId]
+      );
+
+      res.json({ success: true, items: result.rows });
+    } catch (error) {
+      console.error("Shop catalog error:", error);
+      res.status(500).json({
+        success: false,
+        error: "Nu am putut încărca magazinul.",
+      });
+    }
+  });
+
+  app.post("/api/shop/equip", requireAuth, async (req, res) => {
+    const { itemId } = req.body || {};
+
+    if (typeof itemId !== "string" || !/^[a-zA-Z0-9_-]{1,64}$/.test(itemId)) {
+      return res.status(400).json({
+        success: false,
+        error: "ID-ul skin-ului este invalid.",
+      });
+    }
+
+    const client = await pool.connect();
+
+    try {
+      const userId = await getShopUserId(req);
+
+      if (!userId) {
+        return res.status(404).json({
+          success: false,
+          error: "Utilizatorul nu există.",
+        });
+      }
+
+      await client.query("BEGIN");
+
+      const owned = await client.query(
+        "SELECT 1 FROM user_inventory WHERE user_id = $1 AND item_id = $2",
+        [userId, itemId]
+      );
+
+      if (owned.rows.length === 0) {
+        await client.query("ROLLBACK");
+        return res.status(403).json({
+          success: false,
+          error: "Nu deții acest skin.",
+        });
+      }
+
+      await client.query(
+        "UPDATE user_inventory SET is_equipped = (item_id = $2) WHERE user_id = $1",
+        [userId, itemId]
+      );
+      await client.query("COMMIT");
+
+      res.json({ success: true, equipped: itemId });
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      console.error("Shop equip error:", error);
+      res.status(500).json({
+        success: false,
+        error: "Nu am putut echipa acest skin.",
+      });
+    } finally {
+      client.release();
+    }
+  });
+
+  app.use("/api/shop", (req, res) => {
+    res.status(503).json({
+      ...SOLANA_NOT_CONFIGURED,
+      error:
+        "Cumpărarea skin-urilor nu este disponibilă: lipsesc cheile Solana din server/.env.",
+    });
+  });
+}
 
 // =========================================================
 // PROFILE (USERNAME) + CAMPUS (VERIFIED UPT STUDENTS ONLY)
@@ -80,6 +243,18 @@ app.use(
   "/api/campus",
   createCampusRouter({ requireAuth, pool, access: campusAccess })
 );
+
+// =========================================================
+// BOOK REVIEWS (finished books only)
+// =========================================================
+
+app.use("/api/reading/reviews", createReviewsRouter({ requireAuth, pool }));
+
+// =========================================================
+// FRIENDS (requests, activity feed, shared reviews)
+// =========================================================
+
+app.use("/api/friends", createFriendsRouter({ requireAuth, pool }));
 
 // =========================================================
 // GEMINI CONFIGURATION
@@ -146,7 +321,102 @@ async function getReadingUserId(req) {
   return String(result.rows[0].id);
 }
 
-// GET – toate cărțile utilizatorului, inclusiv coperțile
+// Coloanele returnate pentru o carte (aceeași formă peste tot).
+const BOOK_COLUMNS = `
+  id,
+  title,
+  author,
+  total_pages AS pages,
+  current_page AS "currentPage",
+  status,
+  finished_at AS "finishedAt",
+  open_library_key AS "openLibraryKey",
+  created_at AS "createdAt",
+  updated_at AS "updatedAt",
+  CASE
+    WHEN cover_data IS NOT NULL
+    THEN
+      'data:' ||
+      COALESCE(cover_mime_type, 'image/jpeg') ||
+      ';base64,' ||
+      replace(encode(cover_data, 'base64'), E'\\n', '')
+    ELSE cover_url
+  END AS "coverUrl"`;
+
+// Doar coperți de la Open Library sunt acceptate ca URL extern.
+const OPEN_LIBRARY_COVER =
+  /^https:\/\/covers\.openlibrary\.org\/b\/(id|olid|isbn)\/[A-Za-z0-9-]+-(S|M|L)\.jpg$/;
+const OPEN_LIBRARY_WORK_KEY = /^\/works\/OL\d+W$/;
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function parseWholeNumber(value) {
+  const number = Number(value);
+  return Number.isInteger(number) ? number : NaN;
+}
+
+// GET – caută cărți în Open Library (titlu, autor, pagini, copertă)
+app.get(
+  "/api/books/search",
+  requireAuth,
+  async (req, res) => {
+    const query = String(req.query.q || "").trim().slice(0, 120);
+
+    if (query.length < 2) {
+      return res.json({ success: true, results: [] });
+    }
+
+    try {
+      const url = new URL("https://openlibrary.org/search.json");
+      url.searchParams.set("q", query);
+      url.searchParams.set(
+        "fields",
+        "key,title,author_name,number_of_pages_median,cover_i,first_publish_year"
+      );
+      url.searchParams.set("limit", "12");
+
+      const response = await fetch(url, {
+        headers: {
+          "User-Agent": "PawsAndPages/1.0 (student reading app)",
+        },
+        signal: AbortSignal.timeout(10000),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Open Library a răspuns cu ${response.status}`);
+      }
+
+      const data = await response.json();
+
+      const results = (data.docs || [])
+        .filter((doc) => doc.title && doc.key)
+        .map((doc) => ({
+          openLibraryKey: doc.key,
+          title: String(doc.title).slice(0, 200),
+          author: doc.author_name?.slice(0, 2).join(", ") || "Unknown author",
+          pages: Number.isInteger(doc.number_of_pages_median)
+            ? doc.number_of_pages_median
+            : null,
+          year: doc.first_publish_year ?? null,
+          coverUrl: doc.cover_i
+            ? `https://covers.openlibrary.org/b/id/${doc.cover_i}-M.jpg`
+            : null,
+        }));
+
+      res.json({ success: true, results });
+    } catch (error) {
+      console.error("Open Library search error:", error.message);
+
+      res.status(502).json({
+        success: false,
+        error:
+          "We couldn't reach Open Library right now. Try again, or add the book manually.",
+      });
+    }
+  }
+);
+
+// GET – toate cărțile utilizatorului (întâi cele în curs de citire)
 app.get(
   "/api/reading/books",
   requireAuth,
@@ -155,27 +425,12 @@ app.get(
       const userId = await getReadingUserId(req);
 
       const result = await pool.query(
-        `SELECT
-          id,
-          title,
-          author,
-          total_pages AS pages,
-          current_page AS "currentPage",
-          created_at AS "createdAt",
-
-          CASE
-            WHEN cover_data IS NOT NULL
-            THEN
-              'data:' ||
-              COALESCE(cover_mime_type, 'image/jpeg') ||
-              ';base64,' ||
-              replace(encode(cover_data, 'base64'), E'\n', '')
-            ELSE cover_url
-          END AS "coverUrl"
-
+        `SELECT ${BOOK_COLUMNS}
          FROM reading_books
          WHERE user_id = $1
-         ORDER BY created_at DESC`,
+         ORDER BY
+           (status = 'finished'),
+           COALESCE(finished_at, updated_at) DESC`,
         [userId]
       );
 
@@ -188,31 +443,14 @@ app.get(
     }
   }
 );
-// POST – adaugă o carte și coperta ei
+
+// POST – adaugă o carte (manual cu copertă încărcată, sau din Open Library)
 app.post(
   "/api/reading/books",
   requireAuth,
   coverUpload.single("cover"),
   async (req, res, next) => {
     try {
-      console.log("\n========== UPLOAD DEBUG ==========");
-      console.log(
-        "CONTENT TYPE:",
-        req.headers["content-type"]
-      );
-      console.log("BODY:", req.body);
-
-      console.log(
-        "FILE:",
-        req.file
-          ? {
-              originalname: req.file.originalname,
-              mimetype: req.file.mimetype,
-              size: req.file.size,
-            }
-          : null
-      );
-
       const userId = await getReadingUserId(req);
 
       const {
@@ -220,10 +458,13 @@ app.post(
         author,
         pages,
         currentPage = "0",
+        status = "reading",
+        coverUrl = "",
+        openLibraryKey = "",
       } = req.body || {};
 
-      const parsedPages = Number(pages);
-      const parsedCurrentPage = Number(currentPage);
+      const parsedPages = parseWholeNumber(pages);
+      let parsedCurrentPage = parseWholeNumber(currentPage);
 
       if (!title?.trim()) {
         return res.status(400).json({
@@ -232,14 +473,22 @@ app.post(
         });
       }
 
-      if (
-        !Number.isInteger(parsedPages) ||
-        parsedPages <= 0
-      ) {
+      if (!Number.isInteger(parsedPages) || parsedPages <= 0) {
         return res.status(400).json({
           success: false,
           error: "Numărul de pagini este invalid.",
         });
+      }
+
+      if (status !== "reading" && status !== "finished") {
+        return res.status(400).json({
+          success: false,
+          error: "Statusul cărții este invalid.",
+        });
+      }
+
+      if (status === "finished") {
+        parsedCurrentPage = parsedPages;
       }
 
       if (
@@ -253,13 +502,26 @@ app.post(
         });
       }
 
-      const coverBuffer = req.file
-        ? req.file.buffer
-        : null;
+      const externalCover = String(coverUrl).trim();
 
-      const coverMimeType = req.file
-        ? req.file.mimetype
-        : null;
+      if (externalCover && !OPEN_LIBRARY_COVER.test(externalCover)) {
+        return res.status(400).json({
+          success: false,
+          error: "Coperta trebuie să vină de la Open Library.",
+        });
+      }
+
+      const workKey = String(openLibraryKey).trim();
+
+      if (workKey && !OPEN_LIBRARY_WORK_KEY.test(workKey)) {
+        return res.status(400).json({
+          success: false,
+          error: "Cheia Open Library este invalidă.",
+        });
+      }
+
+      const finished =
+        status === "finished" || parsedCurrentPage >= parsedPages;
 
       const result = await pool.query(
         `INSERT INTO reading_books
@@ -271,48 +533,27 @@ app.post(
             current_page,
             cover_url,
             cover_data,
-            cover_mime_type
+            cover_mime_type,
+            status,
+            finished_at,
+            open_library_key
           )
-         VALUES ($1, $2, $3, $4, $5, NULL, $6, $7)
-         RETURNING
-          id,
-          title,
-          author,
-          total_pages AS pages,
-          current_page AS "currentPage",
-          created_at AS "createdAt",
-
-          CASE
-            WHEN cover_data IS NOT NULL
-            THEN
-              'data:' ||
-              COALESCE(cover_mime_type, 'image/jpeg') ||
-              ';base64,' ||
-              replace(encode(cover_data, 'base64'), E'\n', '')
-            ELSE cover_url
-          END AS "coverUrl"`,
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
+                 CASE WHEN $9 = 'finished' THEN NOW() ELSE NULL END, $10)
+         RETURNING ${BOOK_COLUMNS}`,
         [
           userId,
-          title.trim(),
-          author?.trim() || "Unknown author",
+          title.trim().slice(0, 200),
+          author?.trim().slice(0, 200) || "Unknown author",
           parsedPages,
           parsedCurrentPage,
-          coverBuffer,
-          coverMimeType,
+          req.file ? null : externalCover || null,
+          req.file ? req.file.buffer : null,
+          req.file ? req.file.mimetype : null,
+          finished ? "finished" : "reading",
+          workKey || null,
         ]
       );
-
-      console.log(
-        "Carte salvată în TigerData:",
-        result.rows[0].title
-      );
-
-      console.log(
-        "Copertă salvată:",
-        Boolean(coverBuffer)
-      );
-
-      console.log("==================================\n");
 
       res.status(201).json({
         success: true,
@@ -323,6 +564,154 @@ app.post(
     }
   }
 );
+
+// Actualizează pagina curentă / statusul unei cărți. Folosit de PATCH
+// și de salvarea unei sesiuni de lectură. Returnează cartea sau null.
+async function updateBookProgress(client, userId, bookId, changes) {
+  const current = await client.query(
+    `SELECT total_pages, current_page, status
+     FROM reading_books
+     WHERE id = $1 AND user_id = $2
+     FOR UPDATE`,
+    [bookId, userId]
+  );
+
+  if (current.rows.length === 0) {
+    return null;
+  }
+
+  const book = current.rows[0];
+
+  const totalPages = changes.totalPages ?? book.total_pages;
+  let currentPage = changes.currentPage ?? book.current_page;
+  let status;
+
+  if (currentPage > totalPages) {
+    const error = new Error(`Pagina trebuie să fie între 0 și ${totalPages}.`);
+    error.status = 400;
+    throw error;
+  }
+
+  if (changes.status === "finished") {
+    status = "finished";
+    currentPage = totalPages;
+  } else if (changes.status === "reading") {
+    status = "reading";
+    // Redeschisă: nu poate rămâne pe ultima pagină, altfel ar părea terminată.
+    if (currentPage >= totalPages) {
+      currentPage = Math.max(totalPages - 1, 0);
+    }
+  } else {
+    status = currentPage >= totalPages ? "finished" : "reading";
+  }
+
+  const updated = await client.query(
+    `UPDATE reading_books
+     SET total_pages = $3,
+         current_page = $4,
+         status = $5,
+         finished_at = CASE
+           WHEN $5 = 'finished' THEN COALESCE(finished_at, NOW())
+           ELSE NULL
+         END,
+         updated_at = NOW()
+     WHERE id = $1 AND user_id = $2
+     RETURNING ${BOOK_COLUMNS}`,
+    [bookId, userId, totalPages, currentPage, status]
+  );
+
+  return updated.rows[0];
+}
+
+// PATCH – actualizează pagina curentă, numărul de pagini sau statusul
+app.patch(
+  "/api/reading/books/:id",
+  requireAuth,
+  async (req, res, next) => {
+    if (!UUID.test(req.params.id)) {
+      return res.status(400).json({
+        success: false,
+        error: "ID-ul cărții este invalid.",
+      });
+    }
+
+    const { currentPage, totalPages, status } = req.body || {};
+    const changes = {};
+
+    if (currentPage !== undefined) {
+      changes.currentPage = parseWholeNumber(currentPage);
+
+      if (!Number.isInteger(changes.currentPage) || changes.currentPage < 0) {
+        return res.status(400).json({
+          success: false,
+          error: "Pagina curentă este invalidă.",
+        });
+      }
+    }
+
+    if (totalPages !== undefined) {
+      changes.totalPages = parseWholeNumber(totalPages);
+
+      if (!Number.isInteger(changes.totalPages) || changes.totalPages <= 0) {
+        return res.status(400).json({
+          success: false,
+          error: "Numărul de pagini este invalid.",
+        });
+      }
+    }
+
+    if (status !== undefined) {
+      if (status !== "reading" && status !== "finished") {
+        return res.status(400).json({
+          success: false,
+          error: "Statusul cărții este invalid.",
+        });
+      }
+
+      changes.status = status;
+    }
+
+    if (Object.keys(changes).length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: "Nu există nimic de actualizat.",
+      });
+    }
+
+    const client = await pool.connect();
+
+    try {
+      const userId = await getReadingUserId(req);
+
+      await client.query("BEGIN");
+
+      const book = await updateBookProgress(
+        client,
+        userId,
+        req.params.id,
+        changes
+      );
+
+      if (!book) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({
+          success: false,
+          error: "Cartea nu a fost găsită.",
+        });
+      }
+
+      await client.query("COMMIT");
+
+      res.json({ success: true, book });
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      next(error);
+    } finally {
+      client.release();
+    }
+  }
+);
+
 // GET – sesiunile utilizatorului
 app.get(
   "/api/reading/sessions",
@@ -356,53 +745,70 @@ app.get(
   }
 );
 
-// POST – salvează o sesiune de lectură
+// POST – salvează o sesiune de lectură. Dacă sesiunea are o carte,
+// actualizează și pagina / statusul cărții în aceeași tranzacție.
 app.post(
   "/api/reading/sessions",
   requireAuth,
   async (req, res, next) => {
+    const {
+      bookId = null,
+      durationSeconds,
+      startPage = 0,
+      endPage = null,
+      impressions = "",
+      finishedBook = false,
+    } = req.body || {};
+
+    if (
+      !Number.isInteger(durationSeconds) ||
+      durationSeconds <= 0 ||
+      durationSeconds > 24 * 60 * 60 ||
+      !Number.isInteger(startPage) ||
+      startPage < 0 ||
+      (endPage !== null && (!Number.isInteger(endPage) || endPage < 0)) ||
+      typeof impressions !== "string" ||
+      (bookId !== null && !UUID.test(String(bookId)))
+    ) {
+      return res.status(400).json({
+        success: false,
+        error: "Datele sesiunii sunt invalide.",
+      });
+    }
+
+    const client = await pool.connect();
+
     try {
       const userId = await getReadingUserId(req);
 
-      const {
-        bookId = null,
-        durationSeconds,
-        startPage = 0,
-        endPage = 0,
-        impressions = "",
-      } = req.body || {};
+      await client.query("BEGIN");
 
-      if (
-        !Number.isInteger(durationSeconds) ||
-        durationSeconds <= 0 ||
-        !Number.isInteger(startPage) ||
-        startPage < 0 ||
-        !Number.isInteger(endPage) ||
-        endPage < 0
-      ) {
-        return res.status(400).json({
-          success: false,
-          error: "Datele sesiunii sunt invalide.",
-        });
-      }
+      let book = null;
+      let fromPage = 0;
+      let toPage = 0;
 
       if (bookId) {
-        const bookResult = await pool.query(
-          `SELECT id
-           FROM reading_books
-           WHERE id = $1 AND user_id = $2`,
-          [bookId, userId]
-        );
+        const changes = {};
 
-        if (bookResult.rows.length === 0) {
+        if (endPage !== null) changes.currentPage = endPage;
+        if (finishedBook) changes.status = "finished";
+
+        book = await updateBookProgress(client, userId, bookId, changes);
+
+        if (!book) {
+          await client.query("ROLLBACK");
           return res.status(404).json({
             success: false,
             error: "Cartea nu a fost găsită.",
           });
         }
+
+        toPage = book.currentPage;
+        // Dacă pagina a fost corectată în jos, sesiunea începe de acolo.
+        fromPage = Math.min(startPage, toPage);
       }
 
-      const result = await pool.query(
+      const result = await client.query(
         `INSERT INTO reading_sessions
           (
             user_id,
@@ -425,18 +831,24 @@ app.post(
           userId,
           bookId,
           durationSeconds,
-          startPage,
-          endPage,
-          impressions,
+          fromPage,
+          toPage,
+          impressions.trim().slice(0, 4000),
         ]
       );
+
+      await client.query("COMMIT");
 
       res.status(201).json({
         success: true,
         session: result.rows[0],
+        book,
       });
     } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
       next(error);
+    } finally {
+      client.release();
     }
   }
 );
@@ -1088,13 +1500,31 @@ app.post(
       );
 
       // CREATE / RETRIEVE SOLANA WALLET
-      const walletAddress = await getOrCreateUserWallet(user.id);
+      // Dacă Solana nu e configurat sau nu răspunde, utilizatorul se
+      // loghează oricum; wallet-ul va fi creat la următoarea sincronizare.
+      let wallet = null;
 
-      // READ REAL PAW BALANCE FROM SOLANA
-      const pawBalance = await getPawBalance(walletAddress);
+      if (getOrCreateUserWallet && getPawBalance) {
+        try {
+          const walletAddress = await getOrCreateUserWallet(user.id);
 
-      console.log("Wallet Solana:", walletAddress);
-      console.log("Sold PAW:", pawBalance);
+          // READ REAL PAW BALANCE FROM SOLANA
+          const pawBalance = await getPawBalance(walletAddress);
+
+          console.log("Wallet Solana:", walletAddress);
+          console.log("Sold PAW:", pawBalance);
+
+          wallet = {
+            address: walletAddress,
+            pawBalance,
+          };
+        } catch (walletError) {
+          console.error(
+            "Wallet Solana indisponibil la sincronizare:",
+            walletError.message
+          );
+        }
+      }
 
       // Re-check the Auth0 email after every login so Campus access follows
       // the account's current, verified email. A failure here must not block
@@ -1117,17 +1547,14 @@ app.post(
           ...user,
           username,
           needsUsername: !username,
-          solana_wallet_address: walletAddress,
+          solana_wallet_address: wallet?.address ?? null,
         },
         campus: campusState
           ? campusAccess.describe(campusState, {
               verificationAvailable: auth0Client.isPasswordlessConfigured,
             })
           : null,
-        wallet: {
-          address: walletAddress,
-          pawBalance,
-        },
+        wallet,
       });
     } catch (error) {
       console.error(
@@ -1148,6 +1575,10 @@ app.post(
 // =========================================================
 
 app.get("/api/wallet", requireAuth, async (req, res) => {
+  if (!getOrCreateUserWallet || !getPawBalance) {
+    return res.status(503).json(SOLANA_NOT_CONFIGURED);
+  }
+
   try {
     const auth0Id = req.auth?.payload?.sub;
 

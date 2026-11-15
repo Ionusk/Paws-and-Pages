@@ -25,6 +25,9 @@ import { getErrorMessage, useApi } from "@/lib/api";
 import { confirmAction } from "@/lib/feedback";
 import { goBack } from "@/lib/navigation";
 import { AnimatedMascot } from "../components/AnimatedMascot";
+import { useSkin } from "../components/SkinProvider";
+import { SkinVideo, canPlaySkinVideos } from "../components/SkinVideo";
+import { SKIN_VIDEOS } from "../constants/skins";
 import { usePawWallet } from "../hooks/usePawWallet";
 
 // --------------------------------------------------
@@ -52,6 +55,8 @@ type SkinVisual = {
   background: string;
   accent: string;
   decoration: string;
+  /** Looping preview video shown on the skin card. */
+  video?: number;
 };
 
 type Skin = SkinVisual & {
@@ -95,40 +100,24 @@ const SKINS: Skin[] = [
     decoration: "#B78DCC",
   },
   {
-    id: "lavender",
-    name: "Lavender Dream",
-    description: "A little extra magic",
-    price: 80,
-    background: "#E8DDF4",
-    accent: "#B99BD6",
-    decoration: "#9471BA",
-  },
-  {
-    id: "strawberry",
-    name: "Strawberry Bloom",
-    description: "Sweet and full of joy",
-    price: 120,
-    background: "#F9E0E5",
-    accent: "#F0AFC0",
-    decoration: "#D77F9B",
-  },
-  {
-    id: "sage",
-    name: "Forest Reader",
-    description: "For peaceful reading days",
+    id: "hogwarts",
+    name: "Hogwarts Laica",
+    description: "Ready for a magical school year",
     price: 150,
-    background: "#E1EBDD",
-    accent: "#A9C5A6",
-    decoration: "#729574",
+    background: "#F3E3E0",
+    accent: "#D9A9A4",
+    decoration: "#8E4B5A",
+    video: SKIN_VIDEOS.hogwarts.original,
   },
   {
-    id: "midnight",
-    name: "Midnight Stories",
-    description: "For late-night adventures",
+    id: "graduation",
+    name: "Graduation Laica",
+    description: "Cap on, diploma ready",
     price: 200,
-    background: "#DCD9ED",
-    accent: "#A5A0D0",
-    decoration: "#7773AC",
+    background: "#E3E6F2",
+    accent: "#B3BBDD",
+    decoration: "#5E6A9E",
+    video: SKIN_VIDEOS.graduation.original,
   },
 ];
 
@@ -237,9 +226,12 @@ export default function ShopScreen() {
     }, [loadShop]),
   );
 
+  // Keeps the skin shown on every other screen in sync with the shop.
+  const { refreshSkin } = useSkin();
+
   const refreshAll = useCallback(async () => {
-    await Promise.all([loadShop(), refreshWallet()]);
-  }, [loadShop, refreshWallet]);
+    await Promise.all([loadShop(), refreshWallet(), refreshSkin()]);
+  }, [loadShop, refreshWallet, refreshSkin]);
 
   // ------------------------------------------------
   // CURRENT SKIN AND COLLECTION
@@ -352,7 +344,7 @@ export default function ShopScreen() {
         throw new Error(data.error || "We couldn't equip this skin.");
       }
 
-      await loadShop();
+      await Promise.all([loadShop(), refreshSkin()]);
 
       setNotice({ tone: "success", message: `${skin.name} is now equipped!` });
     } catch (error) {
@@ -465,23 +457,27 @@ export default function ShopScreen() {
         <View
           style={[styles.skinArtwork, { backgroundColor: skin.background }]}
         >
-          <View
-            style={[styles.artworkCircle, { backgroundColor: skin.accent }]}
-          >
+          {skin.video && canPlaySkinVideos ? (
+            <SkinVideo source={skin.video} style={styles.skinVideo} />
+          ) : (
             <View
-              style={[
-                styles.artworkInnerCircle,
-                { backgroundColor: skin.decoration },
-              ]}
-            />
+              style={[styles.artworkCircle, { backgroundColor: skin.accent }]}
+            >
+              <View
+                style={[
+                  styles.artworkInnerCircle,
+                  { backgroundColor: skin.decoration },
+                ]}
+              />
 
-            <Sparkles
-              size={23}
-              color={COLORS.white}
-              strokeWidth={1.8}
-              style={styles.artworkSparkle}
-            />
-          </View>
+              <Sparkles
+                size={23}
+                color={COLORS.white}
+                strokeWidth={1.8}
+                style={styles.artworkSparkle}
+              />
+            </View>
+          )}
 
           <View style={styles.artworkLabel}>
             <Palette size={13} color={COLORS.text} />
@@ -1106,6 +1102,11 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     position: "relative",
     overflow: "hidden",
+  },
+  skinVideo: {
+    width: "100%",
+    height: "100%",
+    backgroundColor: "transparent",
   },
   artworkCircle: {
     width: 105,
