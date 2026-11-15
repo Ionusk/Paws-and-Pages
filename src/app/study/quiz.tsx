@@ -1,42 +1,32 @@
-
-import React, {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
-
+import { router, useLocalSearchParams } from "expo-router";
 import {
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-  Pressable,
-  Platform,
+    ArrowLeft,
+    CheckCircle2,
+    FileUp,
+    House,
+    PawPrint,
+} from "lucide-react-native";
+import {
+    useCallback,
+    useEffect,
+    useMemo,
+    useRef,
+    useState,
+    type ComponentRef,
+} from "react";
+import {
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Text,
+    useWindowDimensions,
+    View,
 } from "react-native";
 
-import {
-  useLocalSearchParams,
-  router,
-} from "expo-router";
-import { goBack } from '@/lib/navigation';
-
-import { useAuth0 } from "react-native-auth0";
-
-import {
-  PawPrint,
-  CheckCircle2,
-  ArrowLeft,
-  House,
-} from "lucide-react-native";
-
-const API_URL =
-  Platform.OS === "android"
-    ? "http://10.0.2.2:3001"
-    : "http://localhost:3001";
-
-const API_AUDIENCE = "https://paws-and-pages-api";
-const AUTH_SCOPE = "openid profile email offline_access";
+import { Notice } from "@/components/ui/feedback";
+import { COMPACT_BREAKPOINT } from "@/constants/palette";
+import { getErrorMessage, useApi } from "@/lib/api";
+import { goBack } from "@/lib/navigation";
 
 function TopNavigation() {
   return (
@@ -46,7 +36,9 @@ function TopNavigation() {
           styles.navigationButton,
           pressed && styles.navigationButtonPressed,
         ]}
-        onPress={() => goBack('/study')}
+        onPress={() => goBack("/study")}
+        accessibilityRole="button"
+        accessibilityLabel="Go back"
       >
         <ArrowLeft size={17} color="#493653" />
         <Text style={styles.navigationButtonText}>Back</Text>
@@ -59,6 +51,8 @@ function TopNavigation() {
           pressed && styles.navigationButtonPressed,
         ]}
         onPress={() => router.replace("/home")}
+        accessibilityRole="button"
+        accessibilityLabel="Go to home"
       >
         <House size={17} color="#493653" />
         <Text style={styles.navigationButtonText}>Home</Text>
@@ -76,14 +70,16 @@ export default function QuizScreen() {
     viewAnswersOnly?: string;
   }>();
 
-  const { getCredentials } = useAuth0();
+  const { request } = useApi();
+  const { width } = useWindowDimensions();
+  const isCompact = width < COMPACT_BREAKPOINT;
 
-  // IMPORTANT: data trebuie declarată înainte de isAnswerMode.
+  // `data` must be declared before isAnswerMode.
   const data = useMemo(() => {
     try {
       return result ? JSON.parse(result) : null;
     } catch (error) {
-      console.error("Nu am putut interpreta datele quizului:", error);
+      console.error("Could not read the quiz data:", error);
       return null;
     }
   }, [result]);
@@ -101,8 +97,26 @@ export default function QuizScreen() {
   const [saved, setSaved] = useState(false);
   const [saveError, setSaveError] = useState("");
 
+  // One save per attempt. attemptRef changes when the user restarts the
+  // quiz, so late responses from an older attempt are ignored.
+  const scrollRef = useRef<ComponentRef<typeof ScrollView>>(null);
   const saveAttemptRef = useRef(false);
   const attemptRef = useRef(0);
+  const mountedRef = useRef(true);
+  const requestRef = useRef(request);
+
+  useEffect(() => {
+    requestRef.current = request;
+  }, [request]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  const canSave = !isAnswerMode && !!data?.quizId;
 
   const allAnswered =
     !!data?.quiz?.length &&
@@ -118,109 +132,80 @@ export default function QuizScreen() {
     0
   ) ?? 0;
 
-  useEffect(() => {
-    if (isAnswerMode || !allAnswered || !data?.quizId) {
-      return;
-    }
+  const saveResult = useCallback(
+    async (currentAnswers: Record<number, number>) => {
+      if (!canSave || saveAttemptRef.current) {
+        return;
+      }
 
-    if (saveAttemptRef.current) {
-      return;
-    }
+      saveAttemptRef.current = true;
 
-    saveAttemptRef.current = true;
+      const currentAttempt = attemptRef.current;
+      const isCurrent = () =>
+        mountedRef.current && attemptRef.current === currentAttempt;
 
-    const currentAttempt = attemptRef.current;
-    let cancelled = false;
-
-    const saveResult = async () => {
       try {
         setSaving(true);
         setSaved(false);
         setSaveError("");
 
-        const credentials = await getCredentials(
-          AUTH_SCOPE,
-          0,
-          {
-            audience: API_AUDIENCE,
-          }
-        );
-
         const answersPayload = data.quiz.map(
           (_: any, questionIndex: number) => ({
             questionIndex,
-            selectedAnswer: answers[questionIndex],
+            selectedAnswer: currentAnswers[questionIndex],
           })
         );
 
-        const response = await fetch(
-          `${API_URL}/api/study/quiz-results`,
-          {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${credentials.accessToken}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              quizId: Number(data.quizId),
-              answers: answersPayload,
-            }),
-          }
-        );
+        await requestRef.current("/api/study/quiz-results", {
+          method: "POST",
+          body: JSON.stringify({
+            quizId: Number(data.quizId),
+            answers: answersPayload,
+          }),
+        });
 
-        const responseData = await response.json();
-
-        if (!response.ok) {
-          throw new Error(
-            responseData.error ||
-              "Nu am putut salva rezultatul quizului."
-          );
-        }
-
-        if (
-          !cancelled &&
-          attemptRef.current === currentAttempt
-        ) {
+        if (isCurrent()) {
           setSaved(true);
           setSaveError("");
         }
-      } catch (error: any) {
-        console.error(
-          "Eroare la salvarea rezultatului:",
-          error
-        );
+      } catch (error) {
+        console.error("Could not save the quiz result:", error);
 
-        if (
-          !cancelled &&
-          attemptRef.current === currentAttempt
-        ) {
+        if (isCurrent()) {
+          // Allow the user to retry saving this same attempt.
+          saveAttemptRef.current = false;
           setSaveError(
-            error?.message ||
-              "A apărut o eroare la salvarea rezultatului."
+            getErrorMessage(
+              error,
+              "Something went wrong while saving your result."
+            )
           );
         }
       } finally {
-        if (
-          !cancelled &&
-          attemptRef.current === currentAttempt
-        ) {
+        if (isCurrent()) {
           setSaving(false);
         }
       }
-    };
+    },
+    [canSave, data]
+  );
 
-    saveResult();
+  // Save automatically as soon as the last question is answered.
+  // Retries after a failed save are manual.
+  const handleAnswer = (questionIndex: number, optionIndex: number) => {
+    const nextAnswers = { ...answers, [questionIndex]: optionIndex };
+    setAnswers(nextAnswers);
 
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    allAnswered,
-    data,
-    answers,
-    getCredentials,
-    isAnswerMode,
-  ]);
+    const complete =
+      !!data?.quiz?.length &&
+      data.quiz.every(
+        (_: any, index: number) => nextAnswers[index] !== undefined
+      );
+
+    if (complete) {
+      saveResult(nextAnswers);
+    }
+  };
 
   const handleRetry = () => {
     attemptRef.current += 1;
@@ -230,6 +215,9 @@ export default function QuizScreen() {
     setSaving(false);
     setSaved(false);
     setSaveError("");
+
+    // Bring the first question back into view.
+    scrollRef.current?.scrollTo({ y: 0, animated: true });
   };
 
   if (!data?.quiz?.length) {
@@ -249,8 +237,21 @@ export default function QuizScreen() {
         </Text>
 
         <Text style={styles.body}>
-          Generate a study material first.
+          Upload a study material first and Laica will prepare a quiz for you.
         </Text>
+
+        <Pressable
+          style={({ pressed }) => [
+            styles.retryButton,
+            styles.emptyButton,
+            pressed && styles.retryButtonPressed,
+          ]}
+          onPress={() => router.push("/study/upload")}
+          accessibilityRole="button"
+        >
+          <FileUp size={16} color="#FFFFFF" />
+          <Text style={styles.retryText}>Upload material</Text>
+        </Pressable>
       </View>
     );
   }
@@ -259,7 +260,11 @@ export default function QuizScreen() {
 
   return (
     <ScrollView
-      contentContainerStyle={styles.container}
+      ref={scrollRef}
+      contentContainerStyle={[
+        styles.container,
+        isCompact && styles.containerCompact,
+      ]}
       showsVerticalScrollIndicator={false}
     >
       <TopNavigation />
@@ -286,7 +291,7 @@ export default function QuizScreen() {
         </Text>
 
         <Text style={styles.topicTitle}>
-          {data.title}
+          {data.title || data.fileName || "Study material"}
         </Text>
       </View>
 
@@ -323,6 +328,9 @@ export default function QuizScreen() {
       {data.quiz.map((question: any, index: number) => {
         const selected = answers[index];
         const answered = selected !== undefined;
+        const options: string[] = Array.isArray(question.options)
+          ? question.options
+          : [];
 
         return (
           <View style={styles.card} key={index}>
@@ -334,7 +342,7 @@ export default function QuizScreen() {
               {question.question}
             </Text>
 
-            {question.options.map(
+            {options.map(
               (option: string, optionIndex: number) => {
                 const isCorrect =
                   optionIndex === question.correctAnswer;
@@ -342,16 +350,19 @@ export default function QuizScreen() {
                 const isSelected =
                   selected === optionIndex;
 
+                const letter = String.fromCharCode(65 + optionIndex);
+
                 return (
                   <Pressable
                     key={optionIndex}
                     disabled={isAnswerMode || answered}
-                    onPress={() =>
-                      setAnswers((previous) => ({
-                        ...previous,
-                        [index]: optionIndex,
-                      }))
-                    }
+                    onPress={() => handleAnswer(index, optionIndex)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Option ${letter}: ${option}`}
+                    accessibilityState={{
+                      disabled: isAnswerMode || answered,
+                      selected: isSelected,
+                    }}
                     style={[
                       styles.option,
 
@@ -396,7 +407,7 @@ export default function QuizScreen() {
                         ]}
                       >
                         <Text style={styles.optionLetterText}>
-                          {String.fromCharCode(65 + optionIndex)}
+                          {letter}
                         </Text>
                       </View>
 
@@ -466,6 +477,13 @@ export default function QuizScreen() {
           </Text>
 
           <View style={styles.saveStatus}>
+            {!canSave && (
+              <Notice
+                tone="info"
+                message="This quiz isn't linked to your library, so this result won't be saved."
+              />
+            )}
+
             {saving && (
               <Text style={styles.savingText}>
                 Saving your result...
@@ -473,29 +491,56 @@ export default function QuizScreen() {
             )}
 
             {saved && (
-              <Text style={styles.savedText}>
-                Result saved successfully!
-              </Text>
+              <Notice tone="success" message="Result saved successfully!" />
             )}
 
-            {!!saveError && (
-              <Text style={styles.errorText}>
-                {saveError}
-              </Text>
+            {!!saveError && !saving && (
+              <Notice
+                tone="error"
+                title="Your result wasn't saved"
+                message={saveError}
+                actionLabel="Save again"
+                onAction={() => saveResult(answers)}
+              />
             )}
           </View>
 
-          <Pressable
-            style={({ pressed }) => [
-              styles.retryButton,
-              pressed && styles.retryButtonPressed,
-            ]}
-            onPress={handleRetry}
-          >
-            <Text style={styles.retryText}>
-              Try again  ↻
-            </Text>
-          </Pressable>
+          <View style={styles.resultActions}>
+            <Pressable
+              style={({ pressed }) => [
+                styles.retryButton,
+                styles.resultActionButton,
+                pressed && styles.retryButtonPressed,
+              ]}
+              onPress={handleRetry}
+              disabled={saving}
+              accessibilityRole="button"
+              accessibilityLabel="Try the quiz again"
+              accessibilityState={{ disabled: saving }}
+            >
+              <Text style={styles.retryText}>
+                Try again  ↻
+              </Text>
+            </Pressable>
+
+            <Pressable
+              style={({ pressed }) => [
+                styles.retryButton,
+                styles.resultActionButton,
+                styles.studyButton,
+                pressed && styles.retryButtonPressed,
+              ]}
+              onPress={() => router.dismissTo("/study")}
+              disabled={saving}
+              accessibilityRole="button"
+              accessibilityLabel="Back to your study space"
+              accessibilityState={{ disabled: saving }}
+            >
+              <Text style={[styles.retryText, styles.studyButtonText]}>
+                Back to Study
+              </Text>
+            </Pressable>
+          </View>
         </View>
       )}
 
@@ -515,10 +560,16 @@ const styles = StyleSheet.create({
     paddingBottom: 35,
   },
 
+  containerCompact: {
+    paddingHorizontal: 16,
+    paddingTop: 32,
+  },
+
   navigation: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
+    alignSelf: "stretch",
     marginBottom: 28,
   },
 
@@ -530,6 +581,7 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     paddingHorizontal: 17,
     paddingVertical: 11,
+    minHeight: 42,
     borderWidth: 1,
     borderColor: "#DCCBE7",
   },
@@ -556,6 +608,12 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
     padding: 30,
+  },
+
+  emptyButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
   },
 
   eyebrow: {
@@ -803,8 +861,9 @@ const styles = StyleSheet.create({
 
   saveStatus: {
     marginTop: 16,
-    alignItems: "center",
+    alignItems: "stretch",
     width: "100%",
+    gap: 10,
   },
 
   savingText: {
@@ -812,21 +871,6 @@ const styles = StyleSheet.create({
     fontFamily: "Nunito_700Bold",
     fontSize: 13,
     textAlign: "center",
-  },
-
-  savedText: {
-    color: "#638363",
-    fontFamily: "Nunito_800ExtraBold",
-    fontSize: 13,
-    textAlign: "center",
-  },
-
-  errorText: {
-    color: "#B45F55",
-    fontFamily: "Nunito_700Bold",
-    fontSize: 13,
-    textAlign: "center",
-    lineHeight: 20,
   },
 
   retryButton: {
@@ -847,6 +891,30 @@ const styles = StyleSheet.create({
     transform: [{ scale: 0.97 }],
   },
 
+  resultActions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "center",
+    gap: 12,
+    marginTop: 21,
+  },
+
+  resultActionButton: {
+    marginTop: 0,
+    minWidth: 160,
+    alignItems: "center",
+  },
+
+  studyButton: {
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: "#E7D9EE",
+  },
+
+  studyButtonText: {
+    color: "#493653",
+  },
+
   retryText: {
     color: "#FFFFFF",
     fontFamily: "Nunito_800ExtraBold",
@@ -858,6 +926,9 @@ const styles = StyleSheet.create({
     fontFamily: "Nunito_400Regular",
     fontSize: 14,
     textAlign: "center",
+    marginTop: 8,
+    maxWidth: 380,
+    lineHeight: 21,
   },
 
   footer: {

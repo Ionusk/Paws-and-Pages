@@ -1,35 +1,42 @@
 
-import React from 'react';
-import {
-  SafeAreaView,
-  View,
-  Text,
-  StyleSheet,
-  Pressable,
-  Alert,
-  Platform,
-  ScrollView,
-} from 'react-native';
 import { router } from 'expo-router';
-import { goBack } from '@/lib/navigation';
-import { useAuth0 } from 'react-native-auth0';
 import {
-  ArrowLeft,
-  BookOpen,
-  GraduationCap,
-  UsersRound,
-  BookMarked,
-  Clock3,
-  Star,
-  LibraryBig,
-  Mail,
-  ShieldCheck,
-  LogOut,
-  PawPrint,
-  Sparkles,
-  UserRound,
-  ChevronRight,
+    ArrowLeft,
+    BookMarked,
+    BookOpen,
+    ChevronRight,
+    Clock3,
+    GraduationCap,
+    LibraryBig,
+    LogOut,
+    Mail,
+    PawPrint,
+    ShieldCheck,
+    Sparkles,
+    Star,
+    UserRound,
+    UsersRound,
 } from 'lucide-react-native';
+import { useState } from 'react';
+import {
+    ActivityIndicator,
+    Platform,
+    Pressable,
+    SafeAreaView,
+    ScrollView,
+    StyleSheet,
+    Text,
+    useWindowDimensions,
+    View
+} from 'react-native';
+import { useAuth0 } from 'react-native-auth0';
+
+import { Notice, SoonBadge } from '@/components/ui/feedback';
+import { COMPACT_BREAKPOINT } from '@/constants/palette';
+import { useProgressStats } from '@/hooks/useProgressStats';
+import { clearLoginTime, CUSTOM_SCHEME } from '@/lib/authSession';
+import { confirmAction } from '@/lib/feedback';
+import { goBack } from '@/lib/navigation';
 
 const COLORS = {
   background: '#E9DDF2',
@@ -46,15 +53,48 @@ const COLORS = {
   border: '#EDE3F0',
 };
 
+function formatStat(value: number | undefined, loading: boolean) {
+  if (loading && value === undefined) return '...';
+  if (value === undefined) return '—';
+  return value.toLocaleString();
+}
+
 export default function AccountScreen() {
   const { user, clearSession } = useAuth0();
+  const { width } = useWindowDimensions();
+  const isCompact = width < COMPACT_BREAKPOINT;
+
+  const { stats, loading: statsLoading, error: statsError, refresh } =
+    useProgressStats();
+
+  const [loggingOut, setLoggingOut] = useState(false);
+  const [logoutError, setLogoutError] = useState('');
 
   const displayName =
     user?.name || user?.nickname || 'Little reader';
 
   const handleLogout = async () => {
+    if (loggingOut) return;
+
+    const confirmed = await confirmAction({
+      title: 'Log out?',
+      message: "You'll return to the welcome page.",
+      confirmText: 'Log out',
+      destructive: true,
+    });
+
+    if (!confirmed) return;
+
     try {
-      await clearSession();
+      setLoggingOut(true);
+      setLogoutError('');
+      clearLoginTime();
+
+      await clearSession(
+        {},
+        Platform.OS === 'web' ? undefined : { customScheme: CUSTOM_SCHEME }
+      );
+
       router.replace('/');
     } catch (error) {
       console.error('Logout error:', error);
@@ -62,11 +102,10 @@ export default function AccountScreen() {
       if (Platform.OS === 'web') {
         router.replace('/');
       } else {
-        Alert.alert(
-          'Logout failed',
-          "We couldn't log you out. Please try again."
-        );
+        setLogoutError("We couldn't log you out. Please try again.");
       }
+    } finally {
+      setLoggingOut(false);
     }
   };
 
@@ -76,7 +115,7 @@ export default function AccountScreen() {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
       >
-        <View style={styles.container}>
+        <View style={[styles.container, isCompact && styles.containerCompact]}>
           {/* Decorative background */}
           <View style={styles.blobTop} pointerEvents="none" />
           <View style={styles.blobBottom} pointerEvents="none" />
@@ -89,6 +128,8 @@ export default function AccountScreen() {
                 styles.backButton,
                 pressed && styles.pressed,
               ]}
+              accessibilityRole="button"
+              accessibilityLabel="Go back"
             >
               <ArrowLeft size={21} color={COLORS.text} />
             </Pressable>
@@ -151,38 +192,64 @@ export default function AccountScreen() {
               <Text style={styles.sectionLabel}>READ</Text>
             </View>
 
+            {statsError ? (
+              <Notice
+                tone="error"
+                message={statsError}
+                actionLabel="Try again"
+                onAction={refresh}
+                style={styles.statsNotice}
+              />
+            ) : null}
+
             <View style={styles.statsGrid}>
               <View style={[styles.statCard, { backgroundColor: COLORS.lightPink }]}>
                 <BookMarked size={22} color={COLORS.darkPink} />
-                <Text style={styles.statNumber}>—</Text>
-                <Text style={styles.statLabel}>Books read</Text>
+                <Text style={styles.statNumber}>
+                  {formatStat(stats?.booksFinished, statsLoading)}
+                </Text>
+                <Text style={styles.statLabel}>Books finished</Text>
               </View>
 
               <View style={[styles.statCard, { backgroundColor: COLORS.lavender }]}>
                 <LibraryBig size={22} color={COLORS.purple} />
-                <Text style={styles.statNumber}>—</Text>
+                <Text style={styles.statNumber}>
+                  {formatStat(stats?.pagesRead, statsLoading)}
+                </Text>
                 <Text style={styles.statLabel}>Pages read</Text>
               </View>
 
               <View style={[styles.statCard, { backgroundColor: COLORS.peach }]}>
-                <Star size={22} color="#B58A68" />
-                <Text style={styles.statNumber}>—</Text>
-                <Text style={styles.statLabel}>Reviews</Text>
+                <Clock3 size={22} color="#B58A68" />
+                <Text style={styles.statNumber}>
+                  {formatStat(stats?.sessions.length, statsLoading)}
+                </Text>
+                <Text style={styles.statLabel}>Reading sessions</Text>
               </View>
             </View>
 
-            <View style={styles.emptyCard}>
+            <Pressable
+              style={({ pressed }) => [styles.emptyCard, pressed && styles.pressed]}
+              onPress={() => router.push('/reading')}
+              accessibilityRole="button"
+            >
               <View style={styles.emptyIcon}>
                 <BookOpen size={22} color={COLORS.purple} />
               </View>
               <View style={styles.emptyTextContainer}>
-                <Text style={styles.emptyTitle}>Your story is waiting</Text>
+                <Text style={styles.emptyTitle}>
+                  {stats && stats.books.length > 0
+                    ? `${stats.books.length} ${stats.books.length === 1 ? 'book' : 'books'} on your shelf`
+                    : 'Your story is waiting'}
+                </Text>
                 <Text style={styles.emptyDescription}>
-                  Your reading activity, favorite books and reviews will
-                  appear here.
+                  {stats && stats.books.length > 0
+                    ? 'Open your reading corner to continue your journey.'
+                    : 'Add your first book in the reading corner.'}
                 </Text>
               </View>
-            </View>
+              <ChevronRight size={17} color={COLORS.muted} />
+            </Pressable>
           </View>
 
           {/* Study journey */}
@@ -198,35 +265,39 @@ export default function AccountScreen() {
             <View style={styles.statsGrid}>
               <View style={[styles.statCard, { backgroundColor: COLORS.lavender }]}>
                 <LibraryBig size={22} color={COLORS.purple} />
-                <Text style={styles.statNumber}>—</Text>
-                <Text style={styles.statLabel}>Courses</Text>
-              </View>
-
-              <View style={[styles.statCard, { backgroundColor: COLORS.sage }]}>
-                <Clock3 size={22} color="#758B72" />
-                <Text style={styles.statNumber}>—</Text>
-                <Text style={styles.statLabel}>Study sessions</Text>
+                <Text style={styles.statNumber}>
+                  {formatStat(stats?.studyMaterials, statsLoading)}
+                </Text>
+                <Text style={styles.statLabel}>Study materials</Text>
               </View>
 
               <View style={[styles.statCard, { backgroundColor: COLORS.peach }]}>
                 <Star size={22} color="#B58A68" />
-                <Text style={styles.statNumber}>—</Text>
-                <Text style={styles.statLabel}>Quizzes</Text>
+                <Text style={styles.statNumber}>
+                  {formatStat(stats?.quizzes, statsLoading)}
+                </Text>
+                <Text style={styles.statLabel}>Quizzes created</Text>
               </View>
             </View>
 
-            <View style={styles.emptyCard}>
+            <Pressable
+              style={({ pressed }) => [styles.emptyCard, pressed && styles.pressed]}
+              onPress={() => router.push('/study')}
+              accessibilityRole="button"
+            >
               <View style={[styles.emptyIcon, { backgroundColor: COLORS.sage }]}>
                 <GraduationCap size={23} color="#758B72" />
               </View>
               <View style={styles.emptyTextContainer}>
                 <Text style={styles.emptyTitle}>Every lesson counts</Text>
                 <Text style={styles.emptyDescription}>
-                  Uploaded materials, learning progress and quiz results
-                  will be collected here.
+                  {stats && stats.studyMaterials > 0
+                    ? 'Open your learning space to review summaries and quizzes.'
+                    : 'Upload your first course material to get a summary and a quiz.'}
                 </Text>
               </View>
-            </View>
+              <ChevronRight size={17} color={COLORS.muted} />
+            </Pressable>
           </View>
 
           {/* Community */}
@@ -247,14 +318,12 @@ export default function AccountScreen() {
               <View style={styles.communityInfo}>
                 <Text style={styles.communityTitle}>Friends & connections</Text>
                 <Text style={styles.communityDescription}>
-                  Your friends, shared books and community activity will
-                  appear here.
+                  Friends, shared books and community activity are not
+                  available yet.
                 </Text>
               </View>
 
-              <View style={styles.communityCount}>
-                <Text style={styles.communityCountText}>—</Text>
-              </View>
+              <SoonBadge />
             </View>
           </View>
 
@@ -306,26 +375,43 @@ export default function AccountScreen() {
                     Protected by Auth0
                   </Text>
                 </View>
-                <ChevronRight size={17} color={COLORS.muted} />
               </View>
             </View>
           </View>
 
           {/* Logout */}
           <View style={styles.logoutSection}>
+            {logoutError ? (
+              <Notice
+                tone="error"
+                message={logoutError}
+                onDismiss={() => setLogoutError('')}
+                style={styles.logoutNotice}
+              />
+            ) : null}
+
             <Pressable
               style={({ pressed }) => [
                 styles.logoutButton,
-                pressed && styles.pressed,
+                (pressed || loggingOut) && styles.pressed,
               ]}
               onPress={handleLogout}
+              disabled={loggingOut}
+              accessibilityRole="button"
+              accessibilityState={{ disabled: loggingOut, busy: loggingOut }}
             >
-              <LogOut size={19} color={COLORS.white} />
-              <Text style={styles.logoutText}>Log out</Text>
+              {loggingOut ? (
+                <ActivityIndicator color={COLORS.white} />
+              ) : (
+                <LogOut size={19} color={COLORS.white} />
+              )}
+              <Text style={styles.logoutText}>
+                {loggingOut ? 'Logging out...' : 'Log out'}
+              </Text>
             </Pressable>
 
             <Text style={styles.logoutDescription}>
-              You'll return to the welcome page.
+              You’ll return to the welcome page.
             </Text>
           </View>
 
@@ -360,6 +446,20 @@ const styles = StyleSheet.create({
     paddingBottom: 35,
     position: 'relative',
     overflow: 'hidden',
+  },
+
+  containerCompact: {
+    paddingHorizontal: 18,
+  },
+
+  statsNotice: {
+    marginBottom: 13,
+  },
+
+  logoutNotice: {
+    width: '100%',
+    maxWidth: 380,
+    marginBottom: 12,
   },
 
   blobTop: {
@@ -555,11 +655,13 @@ const styles = StyleSheet.create({
 
   statsGrid: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 13,
   },
 
   statCard: {
     flex: 1,
+    minWidth: 96,
     minHeight: 120,
     borderRadius: 20,
     padding: 16,

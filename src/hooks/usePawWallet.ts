@@ -1,17 +1,20 @@
-import { useCallback, useEffect, useState } from "react";
-import { useAuth0 } from "react-native-auth0";
+import { useFocusEffect } from "expo-router";
+import { useCallback, useState } from "react";
 
-const API_URL = "http://localhost:3001";
-const API_AUDIENCE = "https://paws-and-pages-api";
-const AUTH_SCOPE = "openid profile email offline_access";
+import { ApiError, getErrorMessage, useApi } from "@/lib/api";
 
 type PawWallet = {
   address: string;
   pawBalance: string;
 };
 
+/**
+ * Reads the user's wallet and on-chain PAW balance from the backend.
+ * The balance always comes from Solana via the API; it is never computed
+ * on the client.
+ */
 export function usePawWallet() {
-  const { getCredentials } = useAuth0();
+  const { request } = useApi();
 
   const [wallet, setWallet] = useState<PawWallet | null>(null);
   const [loading, setLoading] = useState(true);
@@ -22,34 +25,12 @@ export function usePawWallet() {
       setLoading(true);
       setError("");
 
-      const credentials = await getCredentials(AUTH_SCOPE, 0, {
-        audience: API_AUDIENCE,
-      });
+      const data = await request<{
+        wallet: { address: string; pawBalance: string | number };
+      }>("/api/wallet");
 
-      if (!credentials.accessToken) {
-        throw new Error("Nu am putut obține tokenul Auth0.");
-      }
-
-      const response = await fetch(`${API_URL}/api/wallet`, {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${credentials.accessToken}`,
-        },
-      });
-
-      const data = await response.json().catch(() => ({}));
-
-      // The server runs without Solana keys: not an error, just no wallet.
-      if (data.code === "solana_not_configured") {
-        setWallet(null);
-        setError(data.error);
-        return;
-      }
-
-      if (!response.ok || !data.success) {
-        throw new Error(
-          data.error || `Nu am putut obține soldul PAW (${response.status}).`,
-        );
+      if (!data?.wallet?.address) {
+        throw new Error("The server did not return a wallet.");
       }
 
       setWallet({
@@ -57,21 +38,30 @@ export function usePawWallet() {
         pawBalance: String(data.wallet.pawBalance),
       });
     } catch (err) {
+      // The server runs without Solana keys: not an error, just no wallet.
+      if (err instanceof ApiError && err.data?.code === "solana_not_configured") {
+        setWallet(null);
+        setError(err.message);
+        return;
+      }
+
       console.error("Wallet error:", err);
 
-      setError(
-        err instanceof Error
-          ? err.message
-          : "A apărut o eroare la citirea wallet-ului.",
-      );
+      // Never keep showing an old balance as if it were current.
+      setWallet(null);
+      setError(getErrorMessage(err, "We couldn't load your PAW balance."));
     } finally {
       setLoading(false);
     }
-  }, [getCredentials]);
+  }, [request]);
 
-  useEffect(() => {
-    refreshWallet();
-  }, [refreshWallet]);
+  // Reload whenever the screen gains focus, so a balance changed by a
+  // purchase on another screen is never shown out of date.
+  useFocusEffect(
+    useCallback(() => {
+      refreshWallet();
+    }, [refreshWallet])
+  );
 
   return {
     wallet,

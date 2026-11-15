@@ -1,35 +1,36 @@
-
-import React, { useCallback, useEffect, useState } from "react";
-import {
-  ActivityIndicator,
-  Platform,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-  Pressable,
-} from "react-native";
 import { router, useFocusEffect } from "expo-router";
-import { goBack } from '@/lib/navigation';
-import { useAuth0 } from "react-native-auth0";
 import {
-  ArrowLeft,
-  BookOpen,
-  Sparkles,
-  GraduationCap,
-  Clock,
-  ChevronRight,
-  FileText,
+    ArrowLeft,
+    BookOpen,
+    ChevronRight,
+    FileText,
+    GraduationCap,
+    Sparkles
 } from "lucide-react-native";
+import { useCallback, useRef, useState } from "react";
+import {
+    Platform,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Text,
+    useWindowDimensions,
+    View,
+} from "react-native";
 
-const API_URL =
-  Platform.OS === "android"
-    ? "http://10.0.2.2:3001"
-    : "http://localhost:3001";
+import { StateCard } from "@/components/ui/feedback";
+import { COMPACT_BREAKPOINT } from "@/constants/palette";
+import { getErrorMessage, useApi } from "@/lib/api";
+import { goBack } from "@/lib/navigation";
 
-const API_AUDIENCE = "https://paws-and-pages-api";
-const AUTH_SCOPE = "openid profile email offline_access";
+type MaterialQuiz = {
+  id: number;
+  title?: string;
+  questions: any[];
+  createdAt?: string;
+};
 
+// Shape returned by GET /api/study/materials.
 type StudyMaterial = {
   id: number;
   fileName: string;
@@ -37,60 +38,63 @@ type StudyMaterial = {
   title?: string;
   summary?: string;
   keyPoints?: string[];
-  quizId?: number;
-  quiz?: any[];
+  quizzes?: MaterialQuiz[];
 };
 
+// The backend returns quizzes oldest first; offer the most recent one.
+function getLatestQuiz(material: StudyMaterial) {
+  const quizzes = (material.quizzes || []).filter(
+    (quiz) => Array.isArray(quiz.questions) && quiz.questions.length > 0
+  );
+
+  return quizzes.length > 0 ? quizzes[quizzes.length - 1] : null;
+}
+
+function quizCountLabel(material: StudyMaterial) {
+  const count = material.quizzes?.length ?? 0;
+
+  if (count === 0) return "No quiz yet";
+
+  return count === 1 ? "1 quiz" : `${count} quizzes`;
+}
+
 export default function AISummaryScreen() {
-  const { getCredentials } = useAuth0();
+  const { request } = useApi();
+  const { width } = useWindowDimensions();
+  const isCompact = width < COMPACT_BREAKPOINT;
 
   const [materials, setMaterials] = useState<StudyMaterial[]>([]);
   const [selectedMaterial, setSelectedMaterial] =
     useState<StudyMaterial | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const loadingRef = useRef(false);
 
   const fetchMaterials = useCallback(async () => {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
+
     try {
       setLoading(true);
       setError("");
 
-      const credentials = await getCredentials(
-        AUTH_SCOPE,
-        0,
-        { audience: API_AUDIENCE }
+      const data = await request<{ materials?: StudyMaterial[] }>(
+        "/api/study/materials"
       );
 
-      const response = await fetch(`${API_URL}/api/study/materials`, {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${credentials.accessToken}`,
-          "Content-Type": "application/json",
-        },
-      });
-
-      const responseData = await response.json();
-
-      if (!response.ok) {
-        throw new Error(
-          responseData.message ||
-            responseData.error ||
-            "Nu am putut încărca rezumatele."
-        );
-      }
-
-      setMaterials(responseData.materials || []);
-    } catch (err: any) {
-      console.log("Eroare la încărcarea rezumatelor:", err);
+      setMaterials(Array.isArray(data.materials) ? data.materials : []);
+    } catch (err) {
+      console.error("Could not load summaries:", err);
       setError(
-        err.message || "A apărut o eroare la încărcarea rezumatelor."
+        getErrorMessage(err, "Something went wrong while loading your summaries.")
       );
     } finally {
+      loadingRef.current = false;
       setLoading(false);
     }
-  }, [getCredentials]);
+  }, [request]);
 
-  // Reîncarcă istoricul când utilizatorul revine pe această pagină.
+  // Reload the library whenever the user comes back to this page.
   useFocusEffect(
     useCallback(() => {
       setSelectedMaterial(null);
@@ -101,13 +105,24 @@ export default function AISummaryScreen() {
   const openQuiz = () => {
     if (!selectedMaterial) return;
 
+    const quiz = getLatestQuiz(selectedMaterial);
+    if (!quiz) return;
+
+    // The quiz screen expects `quizId` + `quiz` (the questions array).
     router.push({
       pathname: "/study/quiz",
       params: {
-        result: JSON.stringify(selectedMaterial),
+        result: JSON.stringify({
+          ...selectedMaterial,
+          materialId: selectedMaterial.id,
+          quizId: quiz.id,
+          quiz: quiz.questions,
+        }),
       },
-    } as any);
+    });
   };
+
+  const horizontalPadding = isCompact ? styles.compactPadding : null;
 
   if (selectedMaterial) {
     return (
@@ -115,21 +130,24 @@ export default function AISummaryScreen() {
         data={selectedMaterial}
         onBack={() => setSelectedMaterial(null)}
         openQuiz={openQuiz}
+        isCompact={isCompact}
       />
     );
   }
 
   return (
     <View style={styles.container}>
-      <View style={styles.header}>
+      <View style={[styles.header, horizontalPadding]}>
         <Pressable
           style={styles.backButton}
-          onPress={() => goBack('/study')}
+          onPress={() => goBack("/study")}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
         >
           <ArrowLeft size={22} color="#51446B" />
         </Pressable>
 
-        <View style={{ flex: 1 }}>
+        <View style={styles.headerText}>
           <Text style={styles.headerTitle}>AI Summaries</Text>
           <Text style={styles.headerSubtitle}>
             Your little study library
@@ -143,14 +161,14 @@ export default function AISummaryScreen() {
 
       <ScrollView
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={styles.listContent}
+        contentContainerStyle={[styles.listContent, horizontalPadding]}
       >
         <View style={styles.introCard}>
           <View style={styles.introIcon}>
             <BookOpen size={26} color="#8D78B7" />
           </View>
 
-          <View style={{ flex: 1 }}>
+          <View style={styles.headerText}>
             <Text style={styles.introTitle}>
               Your study collection
             </Text>
@@ -160,27 +178,13 @@ export default function AISummaryScreen() {
           </View>
         </View>
 
-        {loading ? (
-          <View style={styles.centerContainer}>
-            <ActivityIndicator size="large" color="#9B86C4" />
-            <Text style={styles.loadingText}>
-              Loading your summaries...
-            </Text>
-          </View>
-        ) : error ? (
-          <View style={styles.emptyCard}>
-            <Text style={styles.emptyTitle}>
-              Something went wrong
-            </Text>
-            <Text style={styles.emptyDescription}>{error}</Text>
-
-            <Pressable
-              style={styles.uploadButton}
-              onPress={fetchMaterials}
-            >
-              <Text style={styles.uploadButtonText}>Try again</Text>
-            </Pressable>
-          </View>
+        {loading || error ? (
+          <StateCard
+            loading={loading}
+            loadingText="Loading your summaries..."
+            error={error}
+            onRetry={fetchMaterials}
+          />
         ) : materials.length === 0 ? (
           <View style={styles.emptyCard}>
             <View style={styles.emptyIcon}>
@@ -198,7 +202,8 @@ export default function AISummaryScreen() {
 
             <Pressable
               style={styles.uploadButton}
-              onPress={() => router.push("/study/upload" as any)}
+              onPress={() => router.push("/study/upload")}
+              accessibilityRole="button"
             >
               <Text style={styles.uploadButtonText}>
                 Upload material
@@ -216,37 +221,45 @@ export default function AISummaryScreen() {
               </Text>
             </View>
 
-            {materials.map((material) => (
-              <Pressable
-                key={material.id}
-                style={styles.materialCard}
-                onPress={() => setSelectedMaterial(material)}
-              >
-                <View style={styles.materialIcon}>
-                  <FileText size={23} color="#8D78B7" />
-                </View>
+            {materials.map((material) => {
+              const title =
+                material.title || material.fileName || "Untitled material";
 
-                <View style={styles.materialInfo}>
-                  <Text
-                    style={styles.materialTitle}
-                    numberOfLines={2}
-                  >
-                    {material.title ||
-                      material.fileName ||
-                      "Untitled material"}
-                  </Text>
-
-                  <View style={styles.materialMeta}>
-                    <Clock size={13} color="#A39AAF" />
-                    <Text style={styles.materialDate}>
-                      Study material
-                    </Text>
+              return (
+                <Pressable
+                  key={material.id}
+                  style={({ pressed }) => [
+                    styles.materialCard,
+                    pressed && styles.pressed,
+                  ]}
+                  onPress={() => setSelectedMaterial(material)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Open summary: ${title}`}
+                >
+                  <View style={styles.materialIcon}>
+                    <FileText size={23} color="#8D78B7" />
                   </View>
-                </View>
 
-                <ChevronRight size={21} color="#A99ABD" />
-              </Pressable>
-            ))}
+                  <View style={styles.materialInfo}>
+                    <Text
+                      style={styles.materialTitle}
+                      numberOfLines={2}
+                    >
+                      {title}
+                    </Text>
+
+                    <View style={styles.materialMeta}>
+                      <GraduationCap size={13} color="#A39AAF" />
+                      <Text style={styles.materialDate} numberOfLines={1}>
+                        {quizCountLabel(material)}
+                      </Text>
+                    </View>
+                  </View>
+
+                  <ChevronRight size={21} color="#A99ABD" />
+                </Pressable>
+              );
+            })}
           </>
         )}
       </ScrollView>
@@ -258,23 +271,30 @@ function SummaryDetails({
   data,
   onBack,
   openQuiz,
+  isCompact,
 }: {
   data: StudyMaterial;
   onBack: () => void;
   openQuiz: () => void;
+  isCompact: boolean;
 }) {
-  const hasQuiz = Boolean(
-    data.quizId || (data.quiz && data.quiz.length > 0)
-  );
+  const latestQuiz = getLatestQuiz(data);
+  const quizTotal = data.quizzes?.length ?? 0;
+  const horizontalPadding = isCompact ? styles.compactPadding : null;
 
   return (
     <View style={styles.container}>
-      <View style={styles.header}>
-        <Pressable style={styles.backButton} onPress={onBack}>
+      <View style={[styles.header, horizontalPadding]}>
+        <Pressable
+          style={styles.backButton}
+          onPress={onBack}
+          accessibilityRole="button"
+          accessibilityLabel="Back to your summaries"
+        >
           <ArrowLeft size={22} color="#51446B" />
         </Pressable>
 
-        <View style={{ flex: 1 }}>
+        <View style={styles.headerText}>
           <Text style={styles.headerTitle}>Your summary</Text>
           <Text style={styles.headerSubtitle}>
             Learn a little every day
@@ -288,7 +308,7 @@ function SummaryDetails({
 
       <ScrollView
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={styles.detailsContent}
+        contentContainerStyle={[styles.detailsContent, horizontalPadding]}
       >
         <View style={styles.titleCard}>
           <View style={styles.titleIcon}>
@@ -339,26 +359,49 @@ function SummaryDetails({
           )}
         </View>
 
-        {hasQuiz && (
-          <View style={styles.quizCard}>
-            <View style={styles.quizIcon}>
-              <GraduationCap size={25} color="#FFFFFF" />
-            </View>
-
-            <Text style={styles.quizTitle}>
-              Ready to test yourself?
-            </Text>
-
-            <Text style={styles.quizDescription}>
-              Practice what you have learned with a quick quiz.
-            </Text>
-
-            <Pressable style={styles.quizButton} onPress={openQuiz}>
-              <Text style={styles.quizButtonText}>Start quiz</Text>
-              <ChevronRight size={18} color="#FFFFFF" />
-            </Pressable>
+        <View style={styles.quizCard}>
+          <View style={styles.quizIcon}>
+            <GraduationCap size={25} color="#FFFFFF" />
           </View>
-        )}
+
+          <Text style={styles.quizTitle}>
+            Ready to test yourself?
+          </Text>
+
+          <Text style={styles.quizDescription}>
+            {latestQuiz
+              ? quizTotal > 1
+                ? `Practice with your latest quiz. All ${quizTotal} quizzes for this material are in Practice quizzes.`
+                : "Practice what you have learned with a quick quiz."
+              : "This material doesn't have a quiz yet. You can create one in Practice quizzes."}
+          </Text>
+
+          {latestQuiz ? (
+            <Pressable
+              style={({ pressed }) => [
+                styles.quizButton,
+                pressed && styles.pressed,
+              ]}
+              onPress={openQuiz}
+              accessibilityRole="button"
+            >
+              <Text style={styles.quizButtonText}>Start quiz</Text>
+              <ChevronRight size={18} color="#79649F" />
+            </Pressable>
+          ) : (
+            <Pressable
+              style={({ pressed }) => [
+                styles.quizButton,
+                pressed && styles.pressed,
+              ]}
+              onPress={() => router.push("/study/practice")}
+              accessibilityRole="button"
+            >
+              <Text style={styles.quizButtonText}>Go to Practice quizzes</Text>
+              <ChevronRight size={18} color="#79649F" />
+            </Pressable>
+          )}
+        </View>
       </ScrollView>
     </View>
   );
@@ -375,6 +418,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 22,
     paddingTop: Platform.OS === "web" ? 25 : 55,
     paddingBottom: 20,
+  },
+  compactPadding: {
+    paddingHorizontal: 18,
+  },
+  headerText: {
+    flex: 1,
   },
   backButton: {
     width: 42,
@@ -434,16 +483,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 18,
     color: "#827693",
-  },
-  centerContainer: {
-    alignItems: "center",
-    justifyContent: "center",
-    paddingVertical: 65,
-  },
-  loadingText: {
-    color: "#8D78B7",
-    fontSize: 14,
-    marginTop: 14,
   },
   emptyCard: {
     backgroundColor: "#FFFFFF",
@@ -659,5 +698,8 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: "#79649F",
     marginRight: 5,
+  },
+  pressed: {
+    opacity: 0.85,
   },
 });

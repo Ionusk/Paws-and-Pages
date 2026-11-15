@@ -1,31 +1,32 @@
-import React, { useCallback, useState } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  Pressable,
-  SafeAreaView,
-  ActivityIndicator,
-} from 'react-native';
 import { router, useFocusEffect } from 'expo-router';
-import { useAuth0 } from 'react-native-auth0';
 import {
-  ArrowLeft,
-  ArrowUpRight,
-  Clock3,
-  MessageCircle,
-  Mic,
-  PawPrint,
+    ArrowLeft,
+    ArrowUpRight,
+    Clock3,
+    MessageCircle,
+    Mic,
+    PawPrint,
 } from 'lucide-react-native';
-
+import { useCallback, useRef, useState } from 'react';
 import {
-  API_AUDIENCE,
-  AUTH_SCOPE,
-  formatDate,
-  formatDuration,
-  listVoiceConversations,
-  type VoiceConversationSummary,
+    Pressable,
+    SafeAreaView,
+    ScrollView,
+    StyleSheet,
+    Text,
+    useWindowDimensions,
+    View,
+} from 'react-native';
+
+import { Notice, StateCard } from '@/components/ui/feedback';
+import { COMPACT_BREAKPOINT } from '@/constants/palette';
+import { getErrorMessage, useApi } from '@/lib/api';
+import { goBack } from '@/lib/navigation';
+import {
+    formatDate,
+    formatDuration,
+    listVoiceConversations,
+    type VoiceConversationSummary,
 } from '@/lib/voiceConversations';
 
 const COLORS = {
@@ -42,35 +43,36 @@ const COLORS = {
 };
 
 export default function ConversationsScreen() {
-  const { getCredentials } = useAuth0();
+  const { getAccessToken } = useApi();
+  const { width } = useWindowDimensions();
+  const isCompact = width < COMPACT_BREAKPOINT;
+
   const [conversations, setConversations] = useState<
     VoiceConversationSummary[]
   >([]);
   const [loading, setLoading] = useState(true);
+  const [hasLoaded, setHasLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const loadingRef = useRef(false);
 
   const load = useCallback(async () => {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
+
     try {
+      setLoading(true);
       setError(null);
 
-      const credentials = await getCredentials(AUTH_SCOPE, 0, {
-        audience: API_AUDIENCE,
-      });
-
-      if (!credentials?.accessToken) {
-        throw new Error('Could not obtain Auth0 access token.');
-      }
-
-      setConversations(await listVoiceConversations(credentials.accessToken));
+      setConversations(await listVoiceConversations(await getAccessToken()));
+      setHasLoaded(true);
     } catch (err) {
       console.error('Could not load conversations:', err);
-      setError(
-        err instanceof Error ? err.message : 'Could not load conversations.'
-      );
+      setError(getErrorMessage(err, 'Could not load conversations.'));
     } finally {
+      loadingRef.current = false;
       setLoading(false);
     }
-  }, [getCredentials]);
+  }, [getAccessToken]);
 
   // Reload whenever the screen is shown, so new and deleted chats appear.
   useFocusEffect(
@@ -82,12 +84,12 @@ export default function ConversationsScreen() {
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.scrollContent}>
-        <View style={styles.container}>
+        <View style={[styles.container, isCompact && styles.containerCompact]}>
           <View style={styles.header}>
             <Pressable
-              onPress={() =>
-                router.canGoBack() ? router.back() : router.push('/study')
-              }
+              onPress={() => goBack('/study')}
+              accessibilityRole="button"
+              accessibilityLabel="Go back"
               style={({ pressed }) => [
                 styles.iconButton,
                 pressed && styles.pressed,
@@ -103,6 +105,7 @@ export default function ConversationsScreen() {
 
             <Pressable
               onPress={() => router.push('/study/voice')}
+              accessibilityRole="button"
               accessibilityLabel="New conversation"
               style={({ pressed }) => [
                 styles.iconButton,
@@ -115,86 +118,111 @@ export default function ConversationsScreen() {
           </View>
 
           <View style={styles.intro}>
-            <Text style={styles.title}>Your talks with Laica</Text>
+            <Text style={[styles.title, isCompact && styles.titleCompact]}>
+              Your talks with Laica
+            </Text>
             <Text style={styles.subtitle}>
               Every voice conversation is saved here so you can read it again
               later.
             </Text>
           </View>
 
-          {loading ? (
-            <ActivityIndicator color={COLORS.darkPink} style={styles.loader} />
-          ) : error ? (
-            <Pressable onPress={load} style={styles.messageCard}>
-              <Text style={styles.errorText}>{error}</Text>
-              <Text style={styles.retryText}>Tap to try again</Text>
-            </Pressable>
-          ) : conversations.length === 0 ? (
-            <View style={styles.messageCard}>
-              <PawPrint size={32} color={COLORS.darkPink} />
-              <Text style={styles.emptyTitle}>No conversations yet</Text>
-              <Text style={styles.emptyText}>
-                Start talking with Laica and your conversation will appear here
-                when it ends.
-              </Text>
-              <Pressable
-                onPress={() => router.push('/study/voice')}
-                style={({ pressed }) => [
-                  styles.startButton,
-                  pressed && styles.pressed,
-                ]}
-              >
-                <Mic size={18} color={COLORS.white} />
-                <Text style={styles.startText}>Start talking</Text>
-              </Pressable>
-            </View>
+          {!hasLoaded ? (
+            // First load: full placeholder with retry on error.
+            <StateCard
+              loading={loading}
+              loadingText="Loading your conversations..."
+              error={error || (!loading ? 'Could not load conversations.' : null)}
+              onRetry={load}
+            />
           ) : (
-            <View style={styles.list}>
-              {conversations.map((item) => (
-                <Pressable
-                  key={item.id}
-                  onPress={() =>
-                    router.push({
-                      pathname: '/study/conversation/[id]',
-                      params: { id: String(item.id) },
-                    })
-                  }
-                  style={({ pressed }) => [
-                    styles.card,
-                    pressed && styles.cardPressed,
-                  ]}
-                >
-                  <View style={styles.cardTop}>
-                    <Text style={styles.cardTitle} numberOfLines={1}>
-                      {item.title}
-                    </Text>
-                    <ArrowUpRight size={18} color={COLORS.muted} />
-                  </View>
+            <>
+              {/* A later refresh failed; keep the list and show the error. */}
+              {error && (
+                <Notice
+                  tone="error"
+                  message={error}
+                  actionLabel={loading ? undefined : 'Try again'}
+                  onAction={load}
+                  style={styles.refreshNotice}
+                />
+              )}
 
-                  {item.preview && (
-                    <Text style={styles.cardPreview} numberOfLines={2}>
-                      “{item.preview}”
-                    </Text>
-                  )}
+              {conversations.length === 0 ? (
+                <View style={styles.messageCard}>
+                  <PawPrint size={32} color={COLORS.darkPink} />
+                  <Text style={styles.emptyTitle}>No conversations yet</Text>
+                  <Text style={styles.emptyText}>
+                    Start talking with Laica and your conversation will appear
+                    here when it ends.
+                  </Text>
+                  <Pressable
+                    onPress={() => router.push('/study/voice')}
+                    accessibilityRole="button"
+                    style={({ pressed }) => [
+                      styles.startButton,
+                      pressed && styles.pressed,
+                    ]}
+                  >
+                    <Mic size={18} color={COLORS.white} />
+                    <Text style={styles.startText}>Start talking</Text>
+                  </Pressable>
+                </View>
+              ) : (
+                <View style={styles.list}>
+                  {conversations.map((item) => (
+                    <Pressable
+                      key={item.id}
+                      onPress={() =>
+                        router.push({
+                          pathname: '/study/conversation/[id]',
+                          params: { id: String(item.id) },
+                        })
+                      }
+                      accessibilityRole="button"
+                      accessibilityLabel={`Open conversation: ${item.title}`}
+                      style={({ pressed }) => [
+                        styles.card,
+                        pressed && styles.cardPressed,
+                      ]}
+                    >
+                      <View style={styles.cardTop}>
+                        <Text style={styles.cardTitle} numberOfLines={1}>
+                          {item.title}
+                        </Text>
+                        <ArrowUpRight size={18} color={COLORS.muted} />
+                      </View>
 
-                  <View style={styles.cardMeta}>
-                    <Text style={styles.metaText}>
-                      {formatDate(item.startedAt)}
-                    </Text>
-                    <View style={styles.metaItem}>
-                      <Clock3 size={13} color={COLORS.muted} />
-                      <Text style={styles.metaText}>
-                        {formatDuration(item.durationSeconds)}
-                      </Text>
-                    </View>
-                    <View style={styles.metaItem}>
-                      <MessageCircle size={13} color={COLORS.muted} />
-                      <Text style={styles.metaText}>{item.messageCount}</Text>
-                    </View>
-                  </View>
-                </Pressable>
-              ))}
-            </View>
+                      {item.preview && (
+                        <Text style={styles.cardPreview} numberOfLines={2}>
+                          “{item.preview}”
+                        </Text>
+                      )}
+
+                      <View style={styles.cardMeta}>
+                        <Text style={styles.metaText}>
+                          {formatDate(item.startedAt)}
+                        </Text>
+                        <View style={styles.metaItem}>
+                          <Clock3 size={13} color={COLORS.muted} />
+                          <Text style={styles.metaText}>
+                            {formatDuration(item.durationSeconds)}
+                          </Text>
+                        </View>
+                        <View style={styles.metaItem}>
+                          <MessageCircle size={13} color={COLORS.muted} />
+                          <Text style={styles.metaText}>
+                            {item.messageCount === 1
+                              ? '1 message'
+                              : `${item.messageCount} messages`}
+                          </Text>
+                        </View>
+                      </View>
+                    </Pressable>
+                  ))}
+                </View>
+              )}
+            </>
           )}
         </View>
       </ScrollView>
@@ -219,6 +247,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
     paddingTop: 24,
     paddingBottom: 35,
+  },
+
+  containerCompact: {
+    paddingHorizontal: 16,
   },
 
   header: {
@@ -246,6 +278,8 @@ const styles = StyleSheet.create({
 
   headerBrand: {
     alignItems: 'center',
+    flexShrink: 1,
+    paddingHorizontal: 8,
   },
 
   brand: {
@@ -261,6 +295,7 @@ const styles = StyleSheet.create({
     fontFamily: 'Nunito_800ExtraBold',
     letterSpacing: 2,
     marginTop: 4,
+    textAlign: 'center',
   },
 
   intro: {
@@ -275,6 +310,10 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 
+  titleCompact: {
+    fontSize: 26,
+  },
+
   subtitle: {
     color: COLORS.muted,
     fontSize: 13,
@@ -285,8 +324,8 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
 
-  loader: {
-    marginTop: 40,
+  refreshNotice: {
+    marginBottom: 14,
   },
 
   messageCard: {
@@ -297,19 +336,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
     gap: 8,
-  },
-
-  errorText: {
-    color: COLORS.danger,
-    fontSize: 13,
-    fontFamily: 'Nunito_700Bold',
-    textAlign: 'center',
-  },
-
-  retryText: {
-    color: COLORS.muted,
-    fontSize: 12,
-    fontFamily: 'Nunito_600SemiBold',
   },
 
   emptyTitle: {

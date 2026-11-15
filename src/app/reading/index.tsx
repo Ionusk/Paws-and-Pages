@@ -1,31 +1,32 @@
 
-import React, { useCallback, useState } from 'react';
+import { router } from 'expo-router';
 import {
-  View,
-  Text,
-  StyleSheet,
-  SafeAreaView,
-  ScrollView,
-  TouchableOpacity,
-  Image,
-} from 'react-native';
-import { useAuth0 } from 'react-native-auth0';
-import { router, useFocusEffect } from 'expo-router';
-import {
-  BookOpen,
-  BookPlus,
-  LibraryBig,
-  NotebookPen,
-  ArrowUpRight,
-  ArrowRight,
-  BookMarked,
-  Timer,
+    ArrowLeft,
+    ArrowRight,
+    ArrowUpRight,
+    BookMarked,
+    BookOpen,
+    BookPlus,
+    LibraryBig,
+    NotebookPen,
+    Timer,
 } from 'lucide-react-native';
-
 import {
-  getReadingBooks,
-  ReadingBook,
-} from './readingStorage';
+    SafeAreaView,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    useWindowDimensions,
+    View,
+} from 'react-native';
+
+import { BookCard } from '@/components/reading/BookCard';
+import { SoonBadge, StateCard } from '@/components/ui/feedback';
+import { COMPACT_BREAKPOINT } from '@/constants/palette';
+import { useReadingBooks } from '@/hooks/useReadingBooks';
+import { goBack } from '@/lib/navigation';
+import { isBookFinished } from '@/lib/readingApi';
 
 const COLORS = {
   background: '#E9DDF2',
@@ -41,79 +42,130 @@ const COLORS = {
   border: '#DED0E8',
 };
 
+const READING_GOAL = 12;
+const MAX_CURRENT_BOOKS = 3;
+
 export default function ReadingScreen() {
-  const { getCredentials } = useAuth0();
+  const { width } = useWindowDimensions();
+  const isCompact = width < COMPACT_BREAKPOINT;
 
-const AUTH_SCOPE = 'openid profile email offline_access';
-const API_AUDIENCE = 'https://paws-and-pages-api';
-  const [currentBooks, setCurrentBooks] = useState<ReadingBook[]>([]);
-  const [booksRead] = useState(0);
-  const readingGoal = 12;
+  const { books, loaded, loading, error, refresh } = useReadingBooks();
 
-  // Reîncarcă lista de fiecare dată când revenim pe pagina Reading.
-  useFocusEffect(
-  useCallback(() => {
-    let active = true;
+  const inProgressBooks = books.filter((book) => !isBookFinished(book));
+  const finishedBooks = books.filter(isBookFinished);
+  const visibleBooks = inProgressBooks.slice(0, MAX_CURRENT_BOOKS);
+  const hiddenBooks = inProgressBooks.length - visibleBooks.length;
 
-    const loadBooks = async () => {
-      try {
-        const credentials = await getCredentials(
-          AUTH_SCOPE,
-          0,
-          { audience: API_AUDIENCE }
-        );
-
-        if (!credentials.accessToken) {
-          throw new Error('Nu am putut obține tokenul Auth0.');
-        }
-
-        const books = await getReadingBooks(
-          credentials.accessToken
-        );
-
-        if (active) {
-          setCurrentBooks(books);
-        }
-      } catch (error) {
-        console.error('Error loading reading books:', error);
-      }
-    };
-
-    loadBooks();
-
-    return () => {
-      active = false;
-    };
-  }, [getCredentials])
-);
-
-  const progress = Math.min(booksRead / readingGoal, 1);
+  const booksRead = finishedBooks.length;
+  const progress = Math.min(booksRead / READING_GOAL, 1);
   const percentage = Math.round(progress * 100);
+  const year = new Date().getFullYear();
+
+  const renderCurrentBooks = () => {
+    if (!loaded && (loading || error)) {
+      return (
+        <StateCard
+          loading={loading}
+          loadingText="Opening your bookshelf..."
+          error={error}
+          onRetry={refresh}
+        />
+      );
+    }
+
+    if (visibleBooks.length > 0) {
+      return (
+        <View style={styles.bookList}>
+          {visibleBooks.map((book) => (
+            <BookCard key={book.id} book={book} compact={isCompact} />
+          ))}
+
+          {hiddenBooks > 0 && (
+            <TouchableOpacity
+              activeOpacity={0.85}
+              style={styles.moreBooksLink}
+              onPress={() => router.push('/reading/library')}
+              accessibilityRole="button"
+            >
+              <Text style={styles.moreBooksText}>
+                +{hiddenBooks} more {hiddenBooks === 1 ? 'book' : 'books'} in
+                your library
+              </Text>
+              <ArrowRight size={16} color={COLORS.dark} />
+            </TouchableOpacity>
+          )}
+        </View>
+      );
+    }
+
+    return (
+      <View style={styles.currentBookCard}>
+        <View style={styles.emptyBook}>
+          <View style={styles.emptyBookIcon}>
+            <BookPlus size={30} color={COLORS.accent} />
+          </View>
+
+          <Text style={styles.emptyBookTitle}>
+            {finishedBooks.length > 0
+              ? 'Ready for your next story?'
+              : 'Your reading journey starts here'}
+          </Text>
+
+          <Text style={styles.emptyBookText}>
+            {finishedBooks.length > 0
+              ? `You've finished ${finishedBooks.length} ${
+                  finishedBooks.length === 1 ? 'book' : 'books'
+                }. Add a new one to keep going.`
+              : 'Add your first book and it will appear here.'}
+          </Text>
+        </View>
+      </View>
+    );
+  };
 
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView
-        contentContainerStyle={styles.container}
+        contentContainerStyle={[
+          styles.container,
+          isCompact && styles.containerCompact,
+        ]}
         showsVerticalScrollIndicator={false}
       >
+        {/* BACK */}
+        <TouchableOpacity
+          style={styles.backButton}
+          activeOpacity={0.8}
+          onPress={() => goBack('/home')}
+          accessibilityRole="button"
+          accessibilityLabel="Back to home"
+        >
+          <ArrowLeft size={18} color={COLORS.dark} />
+          <Text style={styles.backButtonText}>HOME</Text>
+        </TouchableOpacity>
+
         {/* HEADER */}
         <View style={styles.header}>
-          <View>
+          <View style={styles.headerText}>
             <Text style={styles.eyebrow}>YOUR READING CORNER</Text>
-            <Text style={styles.title}>My reading journey</Text>
+            <Text style={[styles.title, isCompact && styles.titleCompact]}>
+              My reading journey
+            </Text>
             <Text style={styles.subtitle}>
               A little time for yourself and your stories.
             </Text>
           </View>
 
-          <View style={styles.headerIcon}>
-            <BookOpen size={30} color={COLORS.accent} strokeWidth={1.6} />
-          </View>
+          {!isCompact && (
+            <View style={styles.headerIcon}>
+              <BookOpen size={30} color={COLORS.accent} strokeWidth={1.6} />
+            </View>
+          )}
         </View>
 
         {/* CURRENTLY READING */}
         <View style={styles.sectionHeader}>
-          <View>
+          <View style={styles.sectionHeading}>
             <Text style={styles.sectionTitle}>Currently reading</Text>
             <Text style={styles.sectionSubtitle}>
               Your latest reading adventures.
@@ -123,85 +175,13 @@ const API_AUDIENCE = 'https://paws-and-pages-api';
           <BookOpen size={24} color={COLORS.accent} strokeWidth={1.6} />
         </View>
 
-        {currentBooks.length > 0 ? (
-          currentBooks.map((book) => {
-            const bookProgress = book.pages
-              ? Math.min((book.currentPage / book.pages) * 100, 100)
-              : 0;
-
-            return (
-              <View key={book.id} style={styles.currentBookCard}>
-                <View style={styles.bookContent}>
-                  <View style={styles.coverContainer}>
-                    {book.coverUrl ? (
-                      <Image
-                        source={{ uri: book.coverUrl }}
-                        style={styles.bookCover}
-                        resizeMode="cover"
-                      />
-                    ) : (
-                      <View style={styles.coverPlaceholder}>
-                        <BookOpen size={36} color={COLORS.accent} />
-                      </View>
-                    )}
-                  </View>
-
-                  <View style={styles.bookDetails}>
-                    <Text style={styles.currentlyLabel}>
-                      CURRENTLY READING
-                    </Text>
-
-                    <Text style={styles.bookTitle} numberOfLines={3}>
-                      {book.title}
-                    </Text>
-
-                    <Text style={styles.bookAuthor} numberOfLines={2}>
-                      {book.author}
-                    </Text>
-
-                    <Text style={styles.pagesText}>
-                      {book.currentPage} of {book.pages || '?'} pages
-                    </Text>
-
-                    <View style={styles.bookProgressBar}>
-                      <View
-                        style={[
-                          styles.bookProgressFill,
-                          { width: `${bookProgress}%` },
-                        ]}
-                      />
-                    </View>
-
-                    <Text style={styles.bookPercentage}>
-                      {Math.round(bookProgress)}% completed
-                    </Text>
-                  </View>
-                </View>
-              </View>
-            );
-          })
-        ) : (
-          <View style={styles.currentBookCard}>
-            <View style={styles.emptyBook}>
-              <View style={styles.emptyBookIcon}>
-                <BookPlus size={30} color={COLORS.accent} />
-              </View>
-
-              <Text style={styles.emptyBookTitle}>
-                Your reading journey starts here
-              </Text>
-
-              <Text style={styles.emptyBookText}>
-                Add your first book and it will appear here.
-              </Text>
-            </View>
-          </View>
-        )}
+        {renderCurrentBooks()}
 
         <TouchableOpacity
           activeOpacity={0.85}
           style={styles.bookButton}
           onPress={() => router.push('/reading/add-book')}
+          accessibilityRole="button"
         >
           <BookPlus size={17} color={COLORS.dark} />
           <Text style={styles.bookButtonText}>ADD A NEW BOOK</Text>
@@ -210,7 +190,7 @@ const API_AUDIENCE = 'https://paws-and-pages-api';
 
         {/* START READING SESSION */}
         <View style={styles.sectionHeader}>
-          <View>
+          <View style={styles.sectionHeading}>
             <Text style={styles.sectionTitle}>Reading session</Text>
             <Text style={styles.sectionSubtitle}>
               A peaceful moment with Laica.
@@ -224,18 +204,19 @@ const API_AUDIENCE = 'https://paws-and-pages-api';
           <View style={styles.sessionTextContainer}>
             <Text style={styles.sessionEyebrow}>SLOW DOWN & ENJOY</Text>
             <Text style={styles.sessionTitle}>
-              It's time to get cozy.
+              It’s time to get cozy.
             </Text>
             <Text style={styles.sessionDescription}>
-              Settle in, open your book and let Laica keep you company while
-              you read.
+              Start the timer, open your book and let Laica keep you company.
+              Your reading time is saved when you finish the session.
             </Text>
           </View>
 
           <TouchableOpacity
-            style={styles.sessionButton}
+            style={[styles.sessionButton, isCompact && styles.sessionButtonCompact]}
             activeOpacity={0.85}
             onPress={() => router.push('/reading/session')}
+            accessibilityRole="button"
           >
             <Timer size={19} color={COLORS.white} />
             <Text style={styles.sessionButtonText}>
@@ -247,7 +228,7 @@ const API_AUDIENCE = 'https://paws-and-pages-api';
 
         {/* READING GOAL */}
         <View style={styles.sectionHeader}>
-          <View>
+          <View style={styles.sectionHeading}>
             <Text style={styles.sectionTitle}>Reading goal</Text>
             <Text style={styles.sectionSubtitle}>
               Every book brings a new adventure.
@@ -257,28 +238,35 @@ const API_AUDIENCE = 'https://paws-and-pages-api';
           <BookMarked size={24} color={COLORS.accent} strokeWidth={1.6} />
         </View>
 
-        <View style={styles.goalCard}>
+        <View style={[styles.goalCard, isCompact && styles.goalCardCompact]}>
           <View style={styles.cardHeader}>
-            <View>
+            <View style={styles.sectionHeading}>
               <Text style={styles.eyebrow}>YOUR YEARLY GOAL</Text>
               <Text style={styles.goalTitle}>A year full of stories</Text>
             </View>
 
             <View style={styles.goalBadge}>
               <BookMarked size={15} color={COLORS.accent} />
-              <Text style={styles.goalBadgeText}>2026 goal</Text>
+              <Text style={styles.goalBadgeText}>{year} goal</Text>
             </View>
           </View>
 
           <View style={styles.progressContainer}>
-            <View style={styles.progressCircle}>
+            <View
+              style={[
+                styles.progressCircle,
+                isCompact && styles.progressCircleCompact,
+              ]}
+            >
               <View style={styles.progressInner}>
-                <Text style={styles.progressSmall}>BOOKS READ</Text>
+                <Text style={styles.progressSmall}>BOOKS FINISHED</Text>
 
                 <View style={styles.progressNumbers}>
-                  <Text style={styles.progressNumber}>{booksRead}</Text>
+                  <Text style={styles.progressNumber}>
+                    {loaded ? booksRead : '…'}
+                  </Text>
                   <Text style={styles.progressSlash}>/</Text>
-                  <Text style={styles.progressTarget}>{readingGoal}</Text>
+                  <Text style={styles.progressTarget}>{READING_GOAL}</Text>
                 </View>
 
                 <Text style={styles.progressLabel}>books completed</Text>
@@ -291,7 +279,7 @@ const API_AUDIENCE = 'https://paws-and-pages-api';
               {percentage}% completed
             </Text>
             <Text style={styles.progressRemaining}>
-              {Math.max(readingGoal - booksRead, 0)} books to go
+              {Math.max(READING_GOAL - booksRead, 0)} books to go
             </Text>
           </View>
 
@@ -305,13 +293,14 @@ const API_AUDIENCE = 'https://paws-and-pages-api';
           </View>
 
           <Text style={styles.goalFooter}>
-            Every story brings you a little further.
+            A book counts as finished when your current page reaches its last
+            page.
           </Text>
         </View>
 
         {/* LIBRARY ACTIONS */}
         <View style={styles.sectionHeader}>
-          <View>
+          <View style={styles.sectionHeading}>
             <Text style={styles.sectionTitle}>Your bookshelf</Text>
             <Text style={styles.sectionSubtitle}>
               What would you like to do today?
@@ -321,11 +310,16 @@ const API_AUDIENCE = 'https://paws-and-pages-api';
           <LibraryBig size={24} color={COLORS.accent} strokeWidth={1.6} />
         </View>
 
-        <View style={styles.actionGrid}>
+        <View style={[styles.actionGrid, isCompact && styles.actionGridCompact]}>
           <TouchableOpacity
             activeOpacity={0.85}
-            style={[styles.actionCard, styles.addCard]}
+            style={[
+              styles.actionCard,
+              isCompact && styles.actionCardCompact,
+              styles.addCard,
+            ]}
             onPress={() => router.push('/reading/add-book')}
+            accessibilityRole="button"
           >
             <View style={styles.actionTop}>
               <View style={styles.actionIcon}>
@@ -349,8 +343,13 @@ const API_AUDIENCE = 'https://paws-and-pages-api';
 
           <TouchableOpacity
             activeOpacity={0.85}
-            style={[styles.actionCard, styles.libraryCard]}
-            onPress={() => router.push('/reading/add-book')}
+            style={[
+              styles.actionCard,
+              isCompact && styles.actionCardCompact,
+              styles.libraryCard,
+            ]}
+            onPress={() => router.push('/reading/library')}
+            accessibilityRole="button"
           >
             <View style={styles.actionTop}>
               <View style={styles.actionIcon}>
@@ -362,7 +361,9 @@ const API_AUDIENCE = 'https://paws-and-pages-api';
             <View>
               <Text style={styles.actionTitle}>My library</Text>
               <Text style={styles.actionDescription}>
-                Explore your personal bookshelf.
+                {loaded
+                  ? `${books.length} ${books.length === 1 ? 'book' : 'books'} on your shelf.`
+                  : 'Explore your personal bookshelf.'}
               </Text>
             </View>
 
@@ -375,7 +376,7 @@ const API_AUDIENCE = 'https://paws-and-pages-api';
 
         {/* READING ACTIVITIES */}
         <View style={styles.sectionHeader}>
-          <View>
+          <View style={styles.sectionHeading}>
             <Text style={styles.sectionTitle}>Reading activities</Text>
             <Text style={styles.sectionSubtitle}>
               Keep track of your reading journey.
@@ -389,6 +390,8 @@ const API_AUDIENCE = 'https://paws-and-pages-api';
           activeOpacity={0.85}
           style={styles.activityCard}
           onPress={() => router.push('/reading/review')}
+          accessibilityRole="button"
+          accessibilityLabel="Book reviews. Coming soon."
         >
           <View style={styles.activityIcon}>
             <NotebookPen size={23} color={COLORS.accent} />
@@ -401,7 +404,7 @@ const API_AUDIENCE = 'https://paws-and-pages-api';
             </Text>
           </View>
 
-          <ArrowRight size={21} color={COLORS.accent} />
+          <SoonBadge />
         </TouchableOpacity>
 
         {/* FOOTER */}
@@ -429,11 +432,41 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
   },
 
+  containerCompact: {
+    paddingHorizontal: 18,
+    paddingTop: 18,
+  },
+
+  backButton: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    minHeight: 40,
+    backgroundColor: COLORS.white,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 14,
+    marginBottom: 20,
+  },
+
+  backButtonText: {
+    color: COLORS.dark,
+    fontSize: 10,
+    fontFamily: 'Nunito_800ExtraBold',
+    letterSpacing: 1,
+  },
+
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     marginBottom: 30,
+    gap: 16,
+  },
+
+  headerText: {
+    flex: 1,
   },
 
   eyebrow: {
@@ -449,6 +482,10 @@ const styles = StyleSheet.create({
     fontSize: 32,
     fontFamily: 'PlayfairDisplay_700Bold',
     letterSpacing: -0.5,
+  },
+
+  titleCompact: {
+    fontSize: 27,
   },
 
   subtitle: {
@@ -473,6 +510,11 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     marginBottom: 17,
     marginTop: 8,
+    gap: 12,
+  },
+
+  sectionHeading: {
+    flex: 1,
   },
 
   sectionTitle: {
@@ -488,6 +530,24 @@ const styles = StyleSheet.create({
     marginTop: 5,
   },
 
+  bookList: {
+    gap: 14,
+  },
+
+  moreBooksLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 10,
+  },
+
+  moreBooksText: {
+    color: COLORS.dark,
+    fontSize: 12,
+    fontFamily: 'Nunito_800ExtraBold',
+  },
+
   currentBookCard: {
     backgroundColor: COLORS.white,
     borderRadius: 25,
@@ -499,97 +559,12 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.05,
     shadowRadius: 12,
     elevation: 2,
-    marginBottom: 20,
-  },
-
-  bookContent: {
-    flexDirection: 'row',
-    gap: 22,
-    alignItems: 'center',
-  },
-
-  coverContainer: {
-    width: 115,
-    height: 165,
-    borderRadius: 12,
-    overflow: 'hidden',
-    backgroundColor: COLORS.card,
-    shadowColor: COLORS.dark,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.12,
-    shadowRadius: 8,
-    elevation: 3,
-  },
-
-  bookCover: {
-    width: '100%',
-    height: '100%',
-  },
-
-  coverPlaceholder: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  bookDetails: {
-    flex: 1,
-  },
-
-  currentlyLabel: {
-    color: COLORS.accent,
-    fontSize: 9,
-    fontFamily: 'Nunito_800ExtraBold',
-    letterSpacing: 1.5,
-    marginBottom: 9,
-  },
-
-  bookTitle: {
-    color: COLORS.dark,
-    fontSize: 20,
-    fontFamily: 'PlayfairDisplay_700Bold',
-    lineHeight: 27,
-  },
-
-  bookAuthor: {
-    color: COLORS.text,
-    fontSize: 12,
-    fontFamily: 'Nunito_600SemiBold',
-    marginTop: 6,
-  },
-
-  pagesText: {
-    color: COLORS.muted,
-    fontSize: 10,
-    fontFamily: 'Nunito_600SemiBold',
-    marginTop: 20,
-  },
-
-  bookProgressBar: {
-    width: '100%',
-    height: 7,
-    borderRadius: 10,
-    backgroundColor: COLORS.track,
-    overflow: 'hidden',
-    marginTop: 8,
-  },
-
-  bookProgressFill: {
-    height: '100%',
-    backgroundColor: COLORS.primary,
-    borderRadius: 10,
-  },
-
-  bookPercentage: {
-    color: COLORS.accent,
-    fontSize: 10,
-    fontFamily: 'Nunito_800ExtraBold',
-    marginTop: 6,
   },
 
   bookButton: {
     backgroundColor: COLORS.card,
     borderRadius: 14,
+    minHeight: 46,
     paddingVertical: 13,
     paddingHorizontal: 16,
     flexDirection: 'row',
@@ -597,6 +572,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
     marginTop: 20,
+    marginBottom: 20,
   },
 
   bookButtonText: {
@@ -625,6 +601,7 @@ const styles = StyleSheet.create({
     color: COLORS.dark,
     fontSize: 19,
     fontFamily: 'PlayfairDisplay_700Bold',
+    textAlign: 'center',
   },
 
   emptyBookText: {
@@ -690,6 +667,10 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
   },
 
+  sessionButtonCompact: {
+    alignSelf: 'stretch',
+  },
+
   sessionButtonText: {
     color: COLORS.white,
     fontSize: 10,
@@ -713,11 +694,16 @@ const styles = StyleSheet.create({
     marginBottom: 38,
   },
 
+  goalCardCompact: {
+    paddingHorizontal: 20,
+  },
+
   cardHeader: {
     width: '100%',
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    gap: 10,
   },
 
   goalTitle: {
@@ -764,6 +750,12 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.10,
     shadowRadius: 12,
     elevation: 3,
+  },
+
+  progressCircleCompact: {
+    width: 190,
+    height: 190,
+    borderRadius: 95,
   },
 
   progressInner: {
@@ -850,12 +842,17 @@ const styles = StyleSheet.create({
     fontFamily: 'Nunito_400Regular',
     fontStyle: 'italic',
     marginTop: 15,
+    textAlign: 'center',
   },
 
   actionGrid: {
     flexDirection: 'row',
     gap: 18,
     marginBottom: 38,
+  },
+
+  actionGridCompact: {
+    flexDirection: 'column',
   },
 
   actionCard: {
@@ -871,6 +868,11 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.05,
     shadowRadius: 12,
     elevation: 2,
+  },
+
+  actionCardCompact: {
+    flex: 0,
+    minHeight: 170,
   },
 
   addCard: {
@@ -934,6 +936,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
     marginBottom: 12,
+    gap: 12,
   },
 
   activityIcon: {
@@ -943,7 +946,7 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.card,
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 15,
+    marginRight: 3,
   },
 
   activityText: {

@@ -1,33 +1,38 @@
-import { router, useFocusEffect } from "expo-router";
+import { router, useFocusEffect, type Href } from "expo-router";
 import { useCallback, useState } from "react";
-import { useAuth0 } from "react-native-auth0";
-import { goBack } from '@/lib/navigation';
-import { API_AUDIENCE, API_URL } from "@/lib/voiceConversations";
 import {
-  ArrowLeft,
-  ArrowRight,
-  BookOpen,
-  CalendarCheck,
-  Check,
-  Clock3,
-  Coins,
-  GraduationCap,
-  LibraryBig,
-  PenLine,
-  Sparkles,
-  Trophy,
+    ArrowLeft,
+    ArrowRight,
+    BookOpen,
+    CalendarCheck,
+    Check,
+    Clock3,
+    Coins,
+    GraduationCap,
+    LibraryBig,
+    Lock,
+    PenLine,
+    Sparkles,
+    Trophy,
 } from "lucide-react-native";
 import {
-  ActivityIndicator,
-  Pressable,
-  SafeAreaView,
-  ScrollView,
-  StatusBar,
-  StyleSheet,
-  Text,
-  View,
+    ActivityIndicator,
+    Pressable,
+    SafeAreaView,
+    ScrollView,
+    StatusBar,
+    StyleSheet,
+    Text,
+    useWindowDimensions,
+    View,
 } from "react-native";
 
+import { Notice } from "@/components/ui/feedback";
+import { COMPACT_BREAKPOINT } from "@/constants/palette";
+import { useProgressStats } from "@/hooks/useProgressStats";
+import { getErrorMessage, useApi } from "@/lib/api";
+import { goBack } from "@/lib/navigation";
+import type { ReadingBook, ReadingSessionRecord } from "@/lib/readingApi";
 import { usePawWallet } from "../hooks/usePawWallet";
 
 const COLORS = {
@@ -45,25 +50,14 @@ const COLORS = {
   border: "#E7D9EE",
 };
 
-const AUTH_SCOPE = "openid profile email offline_access";
-
-// Look of each quest. Progress, target and reward come from the server
-// (GET /api/quests), which computes them from your TigerData activity.
-type Quest = {
-  id: string;
-  title: string;
-  description: string;
-  reward: number;
-  progress: number;
-  target: number;
-  category: string;
-  icon: typeof BookOpen;
-  color: string;
-  iconColor: string;
+type QuestData = {
+  books: ReadingBook[];
+  sessions: ReadingSessionRecord[];
 };
 
 type ClaimStatus = "pending" | "submitted" | "confirmed" | null;
 
+/** Progress and reward state computed by the server from TigerData. */
 type ServerQuest = {
   id: string;
   reward: number;
@@ -72,42 +66,97 @@ type ServerQuest = {
   claimStatus: ClaimStatus;
 };
 
+type Quest = {
+  id: string;
+  title: string;
+  description: string;
+  reward: number;
+  target: number;
+  unit: string;
+  category: string;
+  icon: typeof BookOpen;
+  color: string;
+  iconColor: string;
+  /**
+   * Client-side estimate, used only until the server answers. The server
+   * (GET /api/quests) is the source of truth and decides the PAW rewards.
+   */
+  measure: ((data: QuestData) => number) | null;
+  unavailableReason?: string;
+  action?: { label: string; route: Href };
+};
+
+function isToday(iso: string | undefined) {
+  if (!iso) return false;
+  const date = new Date(iso);
+  const now = new Date();
+
+  return (
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate()
+  );
+}
+
+/** Monday 00:00 of the current week, in local time. */
+function startOfWeek() {
+  const now = new Date();
+  const day = (now.getDay() + 6) % 7; // 0 = Monday
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  start.setDate(start.getDate() - day);
+  return start;
+}
+
 const dailyQuests: Quest[] = [
   {
     id: "read",
     title: "A little reading",
     description: "Read for 20 minutes today.",
     reward: 15,
-    progress: 0,
     target: 20,
+    unit: "min",
     category: "READING",
     icon: BookOpen,
     color: COLORS.lightPink,
     iconColor: COLORS.darkPink,
+    measure: ({ sessions }) =>
+      Math.floor(
+        sessions
+          .filter((session) => isToday(session.date))
+          .reduce((total, session) => total + session.durationSeconds, 0) / 60,
+      ),
+    action: { label: "Start a reading session", route: "/reading/session" },
   },
   {
     id: "book",
     title: "New beginnings",
-    description: "Add a new book to your collection.",
+    description: "Add a new book to your collection today.",
     reward: 10,
-    progress: 0,
     target: 1,
+    unit: "book",
     category: "COLLECTION",
     icon: LibraryBig,
     color: COLORS.lavender,
     iconColor: COLORS.purple,
+    measure: ({ books }) => books.filter((book) => isToday(book.createdAt)).length,
+    action: { label: "Add a book", route: "/reading/add-book" },
   },
   {
     id: "review",
     title: "Share your thoughts",
-    description: "Write your impressions after a reading session.",
+    description: "Write your impressions after a reading session today.",
     reward: 20,
-    progress: 0,
     target: 1,
+    unit: "session",
     category: "COMMUNITY",
     icon: PenLine,
     color: COLORS.peach,
     iconColor: "#A77C6C",
+    measure: ({ sessions }) =>
+      sessions.filter(
+        (session) => isToday(session.date) && session.impressions?.trim(),
+      ).length,
+    action: { label: "Start a reading session", route: "/reading/session" },
   },
 ];
 
@@ -117,62 +166,102 @@ const weeklyQuests: Quest[] = [
     title: "Consistency is key",
     description: "Read on 5 different days this week.",
     reward: 60,
-    progress: 0,
     target: 5,
+    unit: "days",
     category: "CONSISTENCY",
     icon: CalendarCheck,
     color: COLORS.sage,
     iconColor: "#71866F",
+    measure: ({ sessions }) => {
+      const weekStart = startOfWeek().getTime();
+      const days = new Set(
+        sessions
+          .filter((session) => new Date(session.date).getTime() >= weekStart)
+          .map((session) => new Date(session.date).toDateString()),
+      );
+      return days.size;
+    },
+    action: { label: "Start a reading session", route: "/reading/session" },
   },
   {
     id: "finish",
     title: "The final chapter",
     description: "Finish reading a book this week.",
     reward: 100,
-    progress: 0,
     target: 1,
+    unit: "book",
     category: "ACHIEVEMENT",
     icon: Trophy,
     color: COLORS.peach,
     iconColor: "#A77C6C",
+    measure: null,
+    unavailableReason:
+      "Updating your current page isn't possible yet, so finished books can't be tracked.",
   },
   {
     id: "study",
     title: "Curious minds",
     description: "Complete 3 practice quizzes this week.",
     reward: 45,
-    progress: 0,
     target: 3,
+    unit: "quizzes",
     category: "LEARNING",
     icon: GraduationCap,
     color: COLORS.lavender,
     iconColor: COLORS.purple,
+    // Quiz results live only on the server, so progress comes from there.
+    measure: null,
+    action: { label: "Practice", route: "/study/practice" },
   },
 ];
 
-type QuestCardProps = {
-  quest: Quest;
-  claimStatus: ClaimStatus;
-  claiming: boolean;
-  disabled: boolean;
-  onClaim: () => void;
-};
-
 function QuestCard({
   quest,
-  claimStatus,
+  data,
+  loading,
+  server,
   claiming,
-  disabled,
+  claimDisabled,
   onClaim,
-}: QuestCardProps) {
+}: {
+  quest: Quest;
+  data: QuestData | null;
+  loading: boolean;
+  server: ServerQuest | undefined;
+  claiming: boolean;
+  claimDisabled: boolean;
+  onClaim: () => void;
+}) {
   const Icon = quest.icon;
-  const progress = Math.min(quest.progress / quest.target, 1);
-  const completed = quest.progress >= quest.target;
+  const unavailable = Boolean(quest.unavailableReason);
+  // Server progress wins; the local estimate only fills the gap while loading.
+  const value = unavailable
+    ? null
+    : server
+      ? server.progress
+      : data && quest.measure
+        ? quest.measure(data)
+        : null;
+  const claimStatus = server?.claimStatus ?? null;
   const claimed = claimStatus === "confirmed";
   const confirming = claimStatus === "pending" || claimStatus === "submitted";
+  const progress = value !== null ? Math.min(value / quest.target, 1) : 0;
+  const completed = value !== null && value >= quest.target;
+
+  const status = unavailable
+    ? "Not available yet"
+    : value === null
+      ? loading
+        ? "Checking..."
+        : "Progress unavailable"
+      : completed
+        ? "Completed"
+        : value > 0
+          ? "In progress"
+          : "Not started";
 
   return (
-    <View style={styles.questCard}>
+    <View style={[styles.questCard, unavailable && styles.questCardUnavailable]}>
       <View style={styles.questTop}>
         <View style={[styles.questIcon, { backgroundColor: quest.color }]}>
           <Icon size={23} color={quest.iconColor} strokeWidth={1.7} />
@@ -190,36 +279,55 @@ function QuestCard({
         <Text style={styles.questDescription}>{quest.description}</Text>
       </View>
 
-      <View style={styles.progressSection}>
-        <View style={styles.progressLabels}>
-          <Text style={styles.progressLabel}>YOUR PROGRESS</Text>
-          <Text style={styles.progressValue}>
-            {quest.progress}/{quest.target}
-          </Text>
+      {unavailable ? (
+        <View style={styles.unavailableBox}>
+          <Lock size={14} color={COLORS.muted} />
+          <Text style={styles.unavailableText}>{quest.unavailableReason}</Text>
         </View>
+      ) : (
+        <View style={styles.progressSection}>
+          <View style={styles.progressLabels}>
+            <Text style={styles.progressLabel}>YOUR PROGRESS</Text>
+            <Text style={styles.progressValue}>
+              {value === null ? "—" : Math.min(value, quest.target)}/
+              {quest.target} {quest.unit}
+            </Text>
+          </View>
 
-        <View style={styles.progressTrack}>
           <View
-            style={[
-              styles.progressFill,
-              {
-                width: `${progress * 100}%`,
-                backgroundColor: completed ? "#8BA486" : COLORS.darkPink,
-              },
-            ]}
-          />
+            style={styles.progressTrack}
+            accessible
+            accessibilityRole="progressbar"
+            accessibilityValue={{
+              min: 0,
+              max: quest.target,
+              now: value === null ? 0 : Math.min(value, quest.target),
+            }}
+          >
+            <View
+              style={[
+                styles.progressFill,
+                {
+                  width: `${progress * 100}%`,
+                  backgroundColor: completed ? "#8BA486" : COLORS.darkPink,
+                },
+              ]}
+            />
+          </View>
         </View>
-      </View>
+      )}
 
       <View style={styles.questFooter}>
         <View style={styles.questStatus}>
           {completed ? (
             <Check size={14} color="#71866F" />
+          ) : unavailable ? (
+            <Lock size={14} color={COLORS.muted} />
           ) : (
             <Clock3 size={14} color={COLORS.muted} />
           )}
           <Text style={[styles.statusText, completed && { color: "#71866F" }]}>
-            {completed ? "Completed" : "In progress"}
+            {status}
           </Text>
         </View>
 
@@ -228,14 +336,17 @@ function QuestCard({
             <Check size={13} color="#71866F" />
             <Text style={styles.claimedText}>+{quest.reward} PAW received</Text>
           </View>
-        ) : completed ? (
+        ) : completed && server ? (
           <Pressable
             onPress={onClaim}
-            disabled={disabled}
+            disabled={claimDisabled}
             style={({ pressed }) => [
               styles.claimButton,
-              (pressed || claiming || disabled) && styles.pressed,
+              (pressed || claiming || claimDisabled) && styles.pressed,
             ]}
+            accessibilityRole="button"
+            accessibilityLabel={`Claim ${quest.reward} PAW for ${quest.title}`}
+            accessibilityState={{ disabled: claimDisabled, busy: claiming }}
           >
             {claiming ? (
               <ActivityIndicator size="small" color={COLORS.white} />
@@ -250,16 +361,25 @@ function QuestCard({
                   : `Claim ${quest.reward} PAW`}
             </Text>
           </Pressable>
-        ) : (
-          <Text style={styles.rewardCaption}>Keep going!</Text>
-        )}
+        ) : !completed && !unavailable && quest.action ? (
+          <Pressable
+            onPress={() => router.push(quest.action!.route)}
+            style={({ pressed }) => [styles.questAction, pressed && styles.pressed]}
+            accessibilityRole="button"
+          >
+            <Text style={styles.questActionText}>{quest.action.label}</Text>
+            <ArrowRight size={14} color={COLORS.text} />
+          </Pressable>
+        ) : null}
       </View>
     </View>
   );
 }
 
 export default function QuestsScreen() {
-  const { getCredentials } = useAuth0();
+  const { width } = useWindowDimensions();
+  const isCompact = width < COMPACT_BREAKPOINT;
+
   const {
     balance,
     loading: walletLoading,
@@ -267,51 +387,39 @@ export default function QuestsScreen() {
   } = usePawWallet();
   const displayedBalance = walletLoading ? "..." : (balance ?? "—");
 
+  const { stats, loading: statsLoading, error: statsError, refresh } =
+    useProgressStats();
+
+  // ------------------------------------------------
+  // SERVER PROGRESS + PAW REWARDS (server/quests.js)
+  // ------------------------------------------------
+
+  const { fetchRaw, request } = useApi();
   const [serverQuests, setServerQuests] = useState<ServerQuest[]>([]);
-  const [questsLoading, setQuestsLoading] = useState(true);
   const [claimingId, setClaimingId] = useState<string | null>(null);
-  const [notice, setNotice] = useState("");
+  const [claimNotice, setClaimNotice] = useState<{
+    tone: "success" | "error" | "info";
+    message: string;
+  } | null>(null);
 
-  const getToken = useCallback(async () => {
-    const credentials = await getCredentials(AUTH_SCOPE, 0, {
-      audience: API_AUDIENCE,
-    });
-
-    if (!credentials?.accessToken) {
-      throw new Error("Nu am putut obține tokenul Auth0.");
-    }
-
-    return credentials.accessToken;
-  }, [getCredentials]);
-
-  const loadQuests = useCallback(async () => {
+  const loadServerQuests = useCallback(async () => {
     try {
-      const token = await getToken();
-      const response = await fetch(`${API_URL}/api/quests`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const data = await response.json().catch(() => ({}));
-
-      if (!response.ok || !data.success) {
-        throw new Error(data.error || `Server error: ${response.status}`);
-      }
-
-      setServerQuests(data.quests);
+      const data = await request<{ quests: ServerQuest[] }>("/api/quests");
+      setServerQuests(data.quests ?? []);
     } catch (error) {
       console.error("Quests loading error:", error);
-      setNotice(
-        error instanceof Error ? error.message : "Nu am putut încărca quest-urile.",
-      );
-    } finally {
-      setQuestsLoading(false);
+      setClaimNotice({
+        tone: "error",
+        message: getErrorMessage(error, "We couldn't load your quest rewards."),
+      });
     }
-  }, [getToken]);
+  }, [request]);
 
   // Reload whenever the screen is shown, so new activity counts right away.
   useFocusEffect(
     useCallback(() => {
-      loadQuests();
-    }, [loadQuests]),
+      loadServerQuests();
+    }, [loadServerQuests]),
   );
 
   const handleClaim = async (quest: Quest) => {
@@ -319,80 +427,69 @@ export default function QuestsScreen() {
 
     try {
       setClaimingId(quest.id);
-      setNotice("");
+      setClaimNotice({
+        tone: "info",
+        message: `Sending ${quest.reward} PAW to your wallet on Solana...`,
+      });
 
-      const token = await getToken();
-      const response = await fetch(
-        `${API_URL}/api/quests/${encodeURIComponent(quest.id)}/claim`,
-        { method: "POST", headers: { Authorization: `Bearer ${token}` } },
-      );
-      const data = await response.json().catch(() => ({}));
+      const { ok, status, data } = await fetchRaw<{
+        success?: boolean;
+        error?: string;
+        pendingConfirmation?: boolean;
+      }>(`/api/quests/${encodeURIComponent(quest.id)}/claim`, {
+        method: "POST",
+      });
 
-      if (response.status === 202 || data.pendingConfirmation) {
-        setNotice(data.error || "Recompensa este încă în curs de confirmare.");
-      } else if (!response.ok || !data.success) {
-        throw new Error(data.error || "Nu am putut primi recompensa.");
+      if (status === 202 || data.pendingConfirmation) {
+        setClaimNotice({
+          tone: "info",
+          message: data.error || "Your reward is still being confirmed.",
+        });
+      } else if (!ok || !data.success) {
+        throw new Error(data.error || "We couldn't send your reward.");
       } else {
-        setNotice(`+${quest.reward} PAW au ajuns în wallet-ul tău!`);
+        setClaimNotice({
+          tone: "success",
+          message: `+${quest.reward} PAW are now in your wallet!`,
+        });
       }
 
-      await Promise.all([loadQuests(), refreshWallet()]);
+      await Promise.all([loadServerQuests(), refreshWallet()]);
     } catch (error) {
       console.error("Quest claim error:", error);
-      setNotice(
-        error instanceof Error ? error.message : "Nu am putut primi recompensa.",
-      );
+      setClaimNotice({
+        tone: "error",
+        message: getErrorMessage(error, "We couldn't send your reward."),
+      });
     } finally {
       setClaimingId(null);
     }
   };
 
-  // Combine the look of each quest with the real numbers from the server.
-  const withProgress = (quests: Quest[]) =>
-    quests.map((quest) => {
-      const live = serverQuests.find((q) => q.id === quest.id);
-
-      return {
-        quest: live
-          ? {
-              ...quest,
-              reward: live.reward,
-              target: live.target,
-              progress: live.progress,
-            }
-          : quest,
-        claimStatus: live?.claimStatus ?? null,
-      };
-    });
-
-  const daily = withProgress(dailyQuests);
-  const weekly = withProgress(weeklyQuests);
-
-  const totalDailyRewards = daily.reduce(
-    (total, { quest }) => total + quest.reward,
-    0,
-  );
-
-  const totalWeeklyRewards = weekly.reduce(
-    (total, { quest }) => total + quest.reward,
-    0,
-  );
-
-  const renderQuest = ({
-    quest,
-    claimStatus,
-  }: {
-    quest: Quest;
-    claimStatus: ClaimStatus;
-  }) => (
+  const renderQuest = (quest: Quest) => (
     <QuestCard
       key={quest.id}
       quest={quest}
-      claimStatus={claimStatus}
+      data={questData}
+      loading={statsLoading}
+      server={serverQuests.find((q) => q.id === quest.id)}
       claiming={claimingId === quest.id}
-      disabled={claimingId !== null}
+      claimDisabled={claimingId !== null}
       onClaim={() => handleClaim(quest)}
     />
+  );
+  const questData: QuestData | null = stats
+    ? { books: stats.books, sessions: stats.sessions }
+    : null;
+
+  const totalDailyRewards = dailyQuests.reduce(
+    (total, quest) => total + quest.reward,
+    0,
+  );
+
+  const totalWeeklyRewards = weeklyQuests.reduce(
+    (total, quest) => total + quest.reward,
+    0,
   );
 
   return (
@@ -401,17 +498,22 @@ export default function QuestsScreen() {
 
       <ScrollView
         style={styles.container}
-        contentContainerStyle={styles.content}
+        contentContainerStyle={[
+          styles.content,
+          isCompact && styles.contentCompact,
+        ]}
         showsVerticalScrollIndicator={false}
       >
         {/* HEADER */}
         <View style={styles.header}>
           <Pressable
-            onPress={() => goBack('/home')}
+            onPress={() => goBack("/home")}
             style={({ pressed }) => [
               styles.backButton,
               pressed && styles.pressed,
             ]}
+            accessibilityRole="button"
+            accessibilityLabel="Go back"
           >
             <ArrowLeft size={21} color={COLORS.text} strokeWidth={1.8} />
           </Pressable>
@@ -430,15 +532,15 @@ export default function QuestsScreen() {
         </View>
 
         {/* HERO */}
-        <View style={styles.heroCard}>
+        <View style={[styles.heroCard, isCompact && styles.heroCardCompact]}>
           <View style={styles.heroText}>
             <Text style={styles.heroEyebrow}>A LITTLE CHALLENGE</Text>
             <Text style={styles.heroTitle}>
               Every chapter{"\n"}is an adventure.
             </Text>
             <Text style={styles.heroDescription}>
-              Complete quests, build good habits and earn Paw Tokens along the
-              way.
+              Complete quests and build good reading habits. Progress updates
+              from your real reading sessions and books.
             </Text>
           </View>
 
@@ -463,22 +565,32 @@ export default function QuestsScreen() {
           </View>
           <View style={styles.rewardSummary}>
             <Text style={styles.summaryNumber}>{totalDailyRewards}</Text>
-            <Text style={styles.summaryLabel}>PAW available</Text>
+            <Text style={styles.summaryLabel}>PAW in rewards</Text>
           </View>
         </View>
 
-        {notice !== "" && (
-          <Pressable onPress={() => setNotice("")} style={styles.notice}>
-            <Sparkles size={15} color={COLORS.darkPink} />
-            <Text style={styles.noticeText}>{notice}</Text>
-          </Pressable>
-        )}
+        {claimNotice ? (
+          <Notice
+            tone={claimNotice.tone}
+            message={claimNotice.message}
+            onDismiss={() => setClaimNotice(null)}
+            style={styles.statsNotice}
+          />
+        ) : null}
 
-        {questsLoading && (
-          <ActivityIndicator color={COLORS.darkPink} style={styles.loader} />
-        )}
+        {statsError ? (
+          <Notice
+            tone="error"
+            message={`We couldn't load your quest progress. ${statsError}`}
+            actionLabel="Try again"
+            onAction={refresh}
+            style={styles.statsNotice}
+          />
+        ) : null}
 
-        <View style={styles.questList}>{daily.map(renderQuest)}</View>
+        <View style={styles.questList}>
+          {dailyQuests.map(renderQuest)}
+        </View>
 
         {/* WEEKLY SECTION */}
         <View style={styles.sectionHeader}>
@@ -495,11 +607,13 @@ export default function QuestsScreen() {
           </View>
           <View style={styles.rewardSummary}>
             <Text style={styles.summaryNumber}>{totalWeeklyRewards}</Text>
-            <Text style={styles.summaryLabel}>PAW available</Text>
+            <Text style={styles.summaryLabel}>PAW in rewards</Text>
           </View>
         </View>
 
-        <View style={styles.questList}>{weekly.map(renderQuest)}</View>
+        <View style={styles.questList}>
+          {weeklyQuests.map(renderQuest)}
+        </View>
 
         {/* BOTTOM NOTE */}
         <View style={styles.infoCard}>
@@ -509,8 +623,7 @@ export default function QuestsScreen() {
           <View style={styles.infoTextContainer}>
             <Text style={styles.infoTitle}>Your effort deserves a reward.</Text>
             <Text style={styles.infoDescription}>
-              Paw Tokens will be earned and verified through Solana. Complete
-              your activities and watch your collection grow.
+              Finish a quest and tap Claim: the PAW are minted to your wallet on Solana Devnet and you can spend them in Laica's Shop.
             </Text>
           </View>
         </View>
@@ -520,7 +633,7 @@ export default function QuestsScreen() {
           style={({ pressed }) => [styles.shopLink, pressed && styles.pressed]}
           onPress={() => router.push("/shop")}
         >
-          <Text style={styles.shopLinkText}>Explore Laica's Shop</Text>
+          <Text style={styles.shopLinkText}>Explore Laica’s Shop</Text>
           <ArrowRight size={18} color={COLORS.text} />
         </Pressable>
 
@@ -698,6 +811,49 @@ const styles = StyleSheet.create({
     gap: 13,
     marginBottom: 35,
   },
+  contentCompact: {
+    paddingHorizontal: 18,
+  },
+  heroCardCompact: {
+    padding: 22,
+    minHeight: 0,
+  },
+  statsNotice: {
+    marginBottom: 13,
+  },
+  questCardUnavailable: {
+    backgroundColor: "#FBF8FC",
+  },
+  unavailableBox: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: "#F3EEF5",
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  unavailableText: {
+    flex: 1,
+    fontSize: 11,
+    lineHeight: 16,
+    fontFamily: "Nunito_600SemiBold",
+    color: COLORS.muted,
+  },
+  questAction: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    minHeight: 36,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    backgroundColor: COLORS.lightPink,
+  },
+  questActionText: {
+    fontSize: 11,
+    fontFamily: "Nunito_800ExtraBold",
+    color: COLORS.text,
+  },
   questCard: {
     backgroundColor: COLORS.white,
     borderRadius: 21,
@@ -804,11 +960,6 @@ const styles = StyleSheet.create({
     fontFamily: "Nunito_700Bold",
     color: COLORS.muted,
   },
-  rewardCaption: {
-    fontSize: 10,
-    fontFamily: "Nunito_700Bold",
-    color: COLORS.darkPink,
-  },
   claimButton: {
     flexDirection: "row",
     alignItems: "center",
@@ -837,25 +988,10 @@ const styles = StyleSheet.create({
     fontFamily: "Nunito_800ExtraBold",
     color: "#71866F",
   },
-  notice: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 9,
-    backgroundColor: COLORS.white,
-    borderWidth: 1,
-    borderColor: COLORS.pink,
-    borderRadius: 15,
-    padding: 13,
-    marginBottom: 16,
-  },
-  noticeText: {
-    flex: 1,
-    fontSize: 12,
+  rewardCaption: {
+    fontSize: 10,
     fontFamily: "Nunito_700Bold",
-    color: COLORS.text,
-  },
-  loader: {
-    marginBottom: 14,
+    color: COLORS.darkPink,
   },
   infoCard: {
     backgroundColor: COLORS.lavender,

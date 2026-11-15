@@ -1,5 +1,3 @@
-import React from 'react';
-import { StyleSheet } from 'react-native';
 import { MaskoView } from '@masko/player-react-native';
 
 import type { MascotAnimation } from '@/constants/skins';
@@ -8,6 +6,8 @@ import { SkinVideo } from './SkinVideo';
 
 type AnimatedMascotProps = {
   animation: MascotAnimation;
+  /** Width and height in points. Defaults to 300. */
+  size?: number;
 };
 
 // ATENȚIE: forma obiectului clip trebuie confirmată
@@ -21,7 +21,7 @@ const clips = {
   },
 };
 
-export function AnimatedMascot({ animation }: AnimatedMascotProps) {
+export function AnimatedMascot({ animation, size = 300 }: AnimatedMascotProps) {
   // Equipped shop skin (Hogwarts, Graduation...) replaces the classic look.
   const skinVideo = useSkinVideo(animation);
 
@@ -30,22 +30,15 @@ export function AnimatedMascot({ animation }: AnimatedMascotProps) {
       <SkinVideo
         key={skinVideo.key}
         source={skinVideo.source}
-        style={styles.video}
+        style={{ width: size, height: size }}
       />
     );
   }
 
   return (
     <MaskoView
-      style={styles.video}
+      style={{ width: size, height: size }}
       clip={clips[animation] as any}
     />
   );
 }
-
-const styles = StyleSheet.create({
-  video: {
-    width: 300,
-    height: 300,
-  },
-});

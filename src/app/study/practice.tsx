@@ -1,41 +1,34 @@
-import React, { useCallback, useState } from 'react';
+import { useFocusEffect, useRouter } from 'expo-router';
 import {
-  View,
-  Text,
-  StyleSheet,
-  Pressable,
-  ScrollView,
-  SafeAreaView,
-  ActivityIndicator,
-  Alert,
-  Platform,
+    ArrowLeft,
+    BookMarked,
+    BookOpen,
+    Brain,
+    CheckCircle2,
+    ChevronRight,
+    Clock3,
+    FileText,
+    Library,
+    Play,
+    Plus,
+    Sparkles,
+} from 'lucide-react-native';
+import { useCallback, useRef, useState } from 'react';
+import {
+    ActivityIndicator,
+    Pressable,
+    SafeAreaView,
+    ScrollView,
+    StyleSheet,
+    Text,
+    useWindowDimensions,
+    View,
 } from 'react-native';
 
-import { useRouter, useFocusEffect } from 'expo-router';
-import { useAuth0 } from 'react-native-auth0';
-
-import {
-  ArrowLeft,
-  BookOpen,
-  Brain,
-  CheckCircle2,
-  ChevronRight,
-  FileText,
-  Library,
-  Play,
-  Plus,
-  Sparkles,
-  BookMarked,
-  Clock3,
-} from 'lucide-react-native';
-
-const API_URL =
-  Platform.OS === 'android'
-    ? 'http://10.0.2.2:3001'
-    : 'http://localhost:3001';
-
-const AUTH_AUDIENCE = 'https://paws-and-pages-api';
-const AUTH_SCOPE = 'openid profile email';
+import { Notice, StateCard } from '@/components/ui/feedback';
+import { COMPACT_BREAKPOINT } from '@/constants/palette';
+import { getErrorMessage, useApi } from '@/lib/api';
+import { goBack } from '@/lib/navigation';
 
 // --------------------------------------------------
 // COLORS - PAWS & PAGES PURPLE / PINK THEME
@@ -95,132 +88,114 @@ type Material = {
   quiz?: Question[];
 };
 
+type MaterialFeedback = {
+  materialId: number;
+  tone: 'success' | 'error';
+  message: string;
+};
+
+// --------------------------------------------------
+// NORMALIZE MATERIALS
+// --------------------------------------------------
+
+function normalizeMaterials(items: any[]): Material[] {
+  return items.map((item) => {
+    let quizzes: Quiz[] = [];
+
+    if (Array.isArray(item.quizzes) && item.quizzes.length > 0) {
+      quizzes = item.quizzes.map((quiz: any, index: number) => ({
+        id: Number(quiz.id),
+        materialId: Number(item.id),
+        title: quiz.title || `Quiz ${index + 1}`,
+        questions: Array.isArray(quiz.questions) ? quiz.questions : [],
+        createdAt: quiz.createdAt,
+      }));
+    } else if (
+      item.quizId &&
+      Array.isArray(item.quiz) &&
+      item.quiz.length > 0
+    ) {
+      quizzes = [
+        {
+          id: Number(item.quizId),
+          materialId: Number(item.id),
+          title: 'Quiz 1',
+          questions: item.quiz,
+        },
+      ];
+    }
+
+    return {
+      id: Number(item.id),
+      fileName: item.fileName || 'Untitled material',
+      fileType: item.fileType,
+      title: item.title || item.fileName || 'Study material',
+      summary: item.summary || '',
+      keyPoints: Array.isArray(item.keyPoints) ? item.keyPoints : [],
+      quizzes,
+      quizId: item.quizId,
+      quiz: item.quiz,
+    };
+  });
+}
+
+function questionCountOf(quiz: Quiz) {
+  return Array.isArray(quiz.questions) ? quiz.questions.length : 0;
+}
+
 // --------------------------------------------------
 // MAIN SCREEN
 // --------------------------------------------------
 
 export default function PracticeScreen() {
   const router = useRouter();
-  const { getCredentials } = useAuth0();
+  const { request } = useApi();
+  const { width } = useWindowDimensions();
+  const isCompact = width < COMPACT_BREAKPOINT;
 
   const [materials, setMaterials] = useState<Material[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [hasLoaded, setHasLoaded] = useState(false);
   const [generatingQuiz, setGeneratingQuiz] = useState<number | null>(null);
+  const [feedback, setFeedback] = useState<MaterialFeedback | null>(null);
 
-  // --------------------------------------------------
-  // NORMALIZE MATERIALS
-  // --------------------------------------------------
-
-  const normalizeMaterials = (items: any[]): Material[] => {
-    return items.map((item) => {
-      let quizzes: Quiz[] = [];
-
-      if (
-        Array.isArray(item.quizzes) &&
-        item.quizzes.length > 0
-      ) {
-        quizzes = item.quizzes.map(
-          (quiz: any, index: number) => ({
-            id: Number(quiz.id),
-            materialId: Number(item.id),
-            title: quiz.title || `Quiz ${index + 1}`,
-            questions: Array.isArray(quiz.questions)
-              ? quiz.questions
-              : [],
-            createdAt: quiz.createdAt,
-          })
-        );
-      } else if (
-        item.quizId &&
-        Array.isArray(item.quiz) &&
-        item.quiz.length > 0
-      ) {
-        quizzes = [
-          {
-            id: Number(item.quizId),
-            materialId: Number(item.id),
-            title: 'Quiz 1',
-            questions: item.quiz,
-          },
-        ];
-      }
-
-      return {
-        id: Number(item.id),
-        fileName: item.fileName || 'Material fără nume',
-        fileType: item.fileType,
-        title: item.title || item.fileName || 'Material de studiu',
-        summary: item.summary || '',
-        keyPoints: Array.isArray(item.keyPoints)
-          ? item.keyPoints
-          : [],
-        quizzes,
-        quizId: item.quizId,
-        quiz: item.quiz,
-      };
-    });
-  };
+  const loadingRef = useRef(false);
+  const generatingRef = useRef(false);
 
   // --------------------------------------------------
   // LOAD MATERIALS
   // --------------------------------------------------
 
   const fetchMaterials = useCallback(async () => {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
+
     try {
       setLoading(true);
+      setLoadError(null);
 
-      const credentials = await getCredentials(
-        AUTH_SCOPE,
-        0,
-        { audience: AUTH_AUDIENCE }
+      const data = await request<{ materials?: any[] }>(
+        '/api/study/materials'
       );
-
-      if (!credentials?.accessToken) {
-        throw new Error(
-          'Nu am putut obține token-ul de autentificare.'
-        );
-      }
-
-      const response = await fetch(
-        `${API_URL}/api/study/materials`,
-        {
-          method: 'GET',
-          headers: {
-            Authorization: `Bearer ${credentials.accessToken}`,
-            'Content-Type': 'application/json',
-          },
-        }
-      );
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(
-          data?.error || 'Nu am putut încărca materialele.'
-        );
-      }
 
       const receivedMaterials = Array.isArray(data.materials)
         ? data.materials
         : [];
 
       setMaterials(normalizeMaterials(receivedMaterials));
+      setHasLoaded(true);
+    } catch (error) {
+      console.error('Could not load quizzes:', error);
 
-    } catch (error: any) {
-      console.error(
-        'Eroare la încărcarea quizurilor:',
-        error
+      setLoadError(
+        getErrorMessage(error, "We couldn't load your quizzes.")
       );
-
-      Alert.alert(
-        'Eroare',
-        error?.message || 'Nu am putut încărca quizurile.'
-      );
-
     } finally {
+      loadingRef.current = false;
       setLoading(false);
     }
-  }, [getCredentials]);
+  }, [request]);
 
   // --------------------------------------------------
   // REFRESH WHEN SCREEN IS FOCUSED
@@ -233,15 +208,20 @@ export default function PracticeScreen() {
   );
 
   // --------------------------------------------------
-  // START SELECTED QUIZ
+  // OPEN A QUIZ (PLAY OR ANSWER KEY)
   // --------------------------------------------------
 
-  const startQuiz = (material: Material, quiz: Quiz) => {
-    if (!quiz.questions || quiz.questions.length === 0) {
-      Alert.alert(
-        'Quiz indisponibil',
-        'Acest quiz nu conține întrebări.'
-      );
+  const openQuiz = (
+    material: Material,
+    quiz: Quiz,
+    viewAnswersOnly: boolean
+  ) => {
+    if (questionCountOf(quiz) === 0) {
+      setFeedback({
+        materialId: material.id,
+        tone: 'error',
+        message: "This quiz doesn't have any questions.",
+      });
       return;
     }
 
@@ -251,36 +231,7 @@ export default function PracticeScreen() {
       quiz: quiz.questions,
       materialId: material.id,
       selectedQuiz: quiz,
-    };
-
-    router.push({
-      pathname: '/study/quiz',
-      params: {
-        result: JSON.stringify(quizData),
-      },
-    });
-  };
-
-  // --------------------------------------------------
-  // VIEW ANSWERS
-  // --------------------------------------------------
-
-  const viewAnswers = (material: Material, quiz: Quiz) => {
-    if (!quiz.questions || quiz.questions.length === 0) {
-      Alert.alert(
-        'Răspunsuri indisponibile',
-        'Acest quiz nu conține întrebări.'
-      );
-      return;
-    }
-
-    const quizData = {
-      ...material,
-      quizId: quiz.id,
-      quiz: quiz.questions,
-      materialId: material.id,
-      selectedQuiz: quiz,
-      viewAnswersOnly: true,
+      ...(viewAnswersOnly ? { viewAnswersOnly: true } : null),
     };
 
     router.push({
@@ -296,103 +247,103 @@ export default function PracticeScreen() {
   // --------------------------------------------------
 
   const generateAnotherQuiz = async (material: Material) => {
+    if (generatingRef.current) return;
+    generatingRef.current = true;
+
     try {
       setGeneratingQuiz(material.id);
+      setFeedback(null);
 
-      const credentials = await getCredentials(
-        AUTH_SCOPE,
-        0,
-        { audience: AUTH_AUDIENCE }
-      );
-
-      if (!credentials?.accessToken) {
-        throw new Error(
-          'Nu am putut obține token-ul de autentificare.'
-        );
-      }
-
-      const response = await fetch(
-        `${API_URL}/api/study/materials/${material.id}/quizzes`,
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${credentials.accessToken}`,
-            'Content-Type': 'application/json',
-          },
-        }
-      );
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(
-          data?.error || 'Nu am putut genera un quiz nou.'
-        );
-      }
+      await request(`/api/study/materials/${material.id}/quizzes`, {
+        method: 'POST',
+      });
 
       await fetchMaterials();
 
-      Alert.alert(
-        'Quiz nou creat!',
-        'Un nou quiz a fost adăugat în biblioteca ta.'
-      );
+      setFeedback({
+        materialId: material.id,
+        tone: 'success',
+        message: 'A new quiz was added to your library.',
+      });
+    } catch (error) {
+      console.error('Could not generate a new quiz:', error);
 
-    } catch (error: any) {
-      console.error(
-        'Eroare la generarea unui quiz nou:',
-        error
-      );
-
-      Alert.alert(
-        'Nu s-a putut genera quizul',
-        error?.message ||
-          'Încearcă din nou peste puțin timp.'
-      );
-
+      setFeedback({
+        materialId: material.id,
+        tone: 'error',
+        message: getErrorMessage(
+          error,
+          "We couldn't create a new quiz. Please try again in a moment."
+        ),
+      });
     } finally {
+      generatingRef.current = false;
       setGeneratingQuiz(null);
     }
   };
 
   // --------------------------------------------------
-  // LOADING SCREEN
+  // FIRST LOAD / LOAD ERROR
   // --------------------------------------------------
 
-  if (loading) {
+  if (!hasLoaded) {
     return (
       <SafeAreaView style={styles.safeArea}>
-        <View style={styles.loadingContainer}>
-          <View style={styles.loadingIcon}>
-            <BookOpen
-              size={30}
-              color={COLORS.lavenderDark}
-              strokeWidth={1.7}
-            />
+        {loading ? (
+          <View style={styles.loadingContainer}>
+            <View style={styles.loadingIcon}>
+              <BookOpen
+                size={30}
+                color={COLORS.lavenderDark}
+                strokeWidth={1.7}
+              />
+            </View>
+
+            <ActivityIndicator size="small" color={COLORS.ink} />
+
+            <Text style={styles.loadingText}>
+              Getting your library ready...
+            </Text>
           </View>
+        ) : (
+          <ScrollView
+            contentContainerStyle={[
+              styles.errorContainer,
+              isCompact && styles.contentContainerCompact,
+            ]}
+          >
+            <StateCard
+              error={loadError || "We couldn't load your quizzes."}
+              onRetry={fetchMaterials}
+            />
 
-          <ActivityIndicator
-            size="small"
-            color={COLORS.ink}
-          />
+            <Pressable
+              style={styles.backToStudyButton}
+              onPress={() => goBack('/study')}
+              accessibilityRole="button"
+            >
+              <ArrowLeft size={15} color={COLORS.secondary} />
 
-          <Text style={styles.loadingText}>
-            Pregătim biblioteca ta...
-          </Text>
-        </View>
+              <Text style={styles.backToStudyText}>Back to Study</Text>
+            </Pressable>
+          </ScrollView>
+        )}
       </SafeAreaView>
     );
   }
 
-  // --------------------------------------------------
-  // FILTER MATERIALS WITH QUIZZES
-  // --------------------------------------------------
-
-  const materialsWithQuizzes = materials.filter(
-    (material) => material.quizzes.length > 0
+  const totalQuizzes = materials.reduce(
+    (total, material) => total + material.quizzes.length,
+    0
   );
 
-  const totalQuizzes = materialsWithQuizzes.reduce(
-    (total, material) => total + material.quizzes.length,
+  const totalQuestions = materials.reduce(
+    (total, material) =>
+      total +
+      material.quizzes.reduce(
+        (sum, quiz) => sum + questionCountOf(quiz),
+        0
+      ),
     0
   );
 
@@ -400,7 +351,7 @@ export default function PracticeScreen() {
   // EMPTY STATE
   // --------------------------------------------------
 
-  if (materialsWithQuizzes.length === 0) {
+  if (materials.length === 0) {
     return (
       <SafeAreaView style={styles.safeArea}>
         <ScrollView
@@ -415,53 +366,37 @@ export default function PracticeScreen() {
             />
 
             <View style={styles.emptySmallIcon}>
-              <Sparkles
-                size={19}
-                color={COLORS.peachDark}
-              />
+              <Sparkles size={19} color={COLORS.peachDark} />
             </View>
           </View>
 
-          <Text style={styles.emptyEyebrow}>
-            PAWS & PAGES LIBRARY
-          </Text>
+          <Text style={styles.emptyEyebrow}>PAWS & PAGES LIBRARY</Text>
 
-          <Text style={styles.emptyTitle}>
-            Your study corner
-          </Text>
+          <Text style={styles.emptyTitle}>Your study corner</Text>
 
           <Text style={styles.emptyText}>
-            Biblioteca ta este încă goală. Încarcă un material
-            de studiu, iar noi îți vom pregăti primul quiz.
+            Your library is still empty. Upload a study material and
+            Laica will prepare your first quiz.
           </Text>
 
           <Pressable
             style={styles.emptyButton}
             onPress={() => router.push('/study/upload')}
+            accessibilityRole="button"
           >
-            <Plus
-              size={18}
-              color="#FFFFFF"
-              strokeWidth={2.2}
-            />
+            <Plus size={18} color="#FFFFFF" strokeWidth={2.2} />
 
-            <Text style={styles.emptyButtonText}>
-              Încarcă un material
-            </Text>
+            <Text style={styles.emptyButtonText}>Upload a material</Text>
           </Pressable>
 
           <Pressable
             style={styles.backToStudyButton}
-            onPress={() => router.replace("/home")}
+            onPress={() => goBack('/study')}
+            accessibilityRole="button"
           >
-            <ArrowLeft
-              size={15}
-              color={COLORS.secondary}
-            />
+            <ArrowLeft size={15} color={COLORS.secondary} />
 
-            <Text style={styles.backToStudyText}>
-              Înapoi la Study
-            </Text>
+            <Text style={styles.backToStudyText}>Back to Study</Text>
           </Pressable>
         </ScrollView>
       </SafeAreaView>
@@ -476,7 +411,10 @@ export default function PracticeScreen() {
     <SafeAreaView style={styles.safeArea}>
       <ScrollView
         style={styles.container}
-        contentContainerStyle={styles.contentContainer}
+        contentContainerStyle={[
+          styles.contentContainer,
+          isCompact && styles.contentContainerCompact,
+        ]}
         showsVerticalScrollIndicator={false}
       >
         {/* HEADER */}
@@ -484,27 +422,19 @@ export default function PracticeScreen() {
         <View style={styles.header}>
           <Pressable
             style={styles.backButton}
-           onPress={() => router.replace("/home")}
+            onPress={() => goBack('/study')}
+            accessibilityRole="button"
+            accessibilityLabel="Go back"
           >
-            <ArrowLeft
-              size={20}
-              color={COLORS.ink}
-              strokeWidth={1.8}
-            />
+            <ArrowLeft size={20} color={COLORS.ink} strokeWidth={1.8} />
           </Pressable>
 
           <View style={styles.headerTextContainer}>
-            <Text style={styles.headerEyebrow}>
-              PAWS & PAGES
-            </Text>
+            <Text style={styles.headerEyebrow}>PAWS & PAGES</Text>
 
-            <Text style={styles.title}>
-              Study Library
-            </Text>
+            <Text style={styles.title}>Study Library</Text>
 
-            <Text style={styles.subtitle}>
-              Un loc liniștit pentru idei mari.
-            </Text>
+            <Text style={styles.subtitle}>A quiet place for big ideas.</Text>
           </View>
 
           <View style={styles.headerIcon}>
@@ -516,25 +446,31 @@ export default function PracticeScreen() {
           </View>
         </View>
 
+        {/* Refresh error while data is already on screen */}
+
+        {loadError && (
+          <Notice
+            tone="error"
+            message={loadError}
+            actionLabel={loading ? undefined : 'Try again'}
+            onAction={fetchMaterials}
+            style={styles.topNotice}
+          />
+        )}
+
         {/* LIBRARY SUMMARY */}
 
         <View style={styles.summaryCard}>
           <View style={styles.summaryTop}>
             <View style={styles.summaryIcon}>
-              <Brain
-                size={23}
-                color={COLORS.peachDark}
-                strokeWidth={1.6}
-              />
+              <Brain size={23} color={COLORS.peachDark} strokeWidth={1.6} />
             </View>
 
             <View style={styles.summaryTextContainer}>
-              <Text style={styles.summaryTitle}>
-                Ready to practice?
-              </Text>
+              <Text style={styles.summaryTitle}>Ready to practice?</Text>
 
               <Text style={styles.summaryDescription}>
-                Alege un quiz și descoperă cât de multe ai reținut.
+                Pick a quiz and find out how much you remember.
               </Text>
             </View>
           </View>
@@ -543,36 +479,30 @@ export default function PracticeScreen() {
 
           <View style={styles.statsRow}>
             <View style={styles.statItem}>
-              <Text style={styles.statNumber}>
-                {materialsWithQuizzes.length}
-              </Text>
+              <Text style={styles.statNumber}>{materials.length}</Text>
 
               <Text style={styles.statLabel}>
-                materiale
+                {materials.length === 1 ? 'material' : 'materials'}
               </Text>
             </View>
 
             <View style={styles.statDivider} />
 
             <View style={styles.statItem}>
-              <Text style={styles.statNumber}>
-                {totalQuizzes}
-              </Text>
+              <Text style={styles.statNumber}>{totalQuizzes}</Text>
 
               <Text style={styles.statLabel}>
-                quizuri
+                {totalQuizzes === 1 ? 'quiz' : 'quizzes'}
               </Text>
             </View>
 
             <View style={styles.statDivider} />
 
             <View style={styles.statItem}>
-              <Text style={styles.statNumber}>
-                {totalQuizzes * 5}
-              </Text>
+              <Text style={styles.statNumber}>{totalQuestions}</Text>
 
               <Text style={styles.statLabel}>
-                întrebări
+                {totalQuestions === 1 ? 'question' : 'questions'}
               </Text>
             </View>
           </View>
@@ -582,34 +512,26 @@ export default function PracticeScreen() {
 
         <View style={styles.sectionHeading}>
           <View>
-            <Text style={styles.sectionEyebrow}>
-              YOUR COLLECTION
-            </Text>
+            <Text style={styles.sectionEyebrow}>YOUR COLLECTION</Text>
 
-            <Text style={styles.sectionTitle}>
-              Materialele tale
-            </Text>
+            <Text style={styles.sectionTitle}>Your materials</Text>
           </View>
 
           <View style={styles.collectionIcon}>
-            <Library
-              size={20}
-              color={COLORS.peachDark}
-              strokeWidth={1.7}
-            />
+            <Library size={20} color={COLORS.peachDark} strokeWidth={1.7} />
           </View>
         </View>
 
         {/* MATERIALS */}
 
-        {materialsWithQuizzes.map((material, materialIndex) => {
+        {materials.map((material, materialIndex) => {
           const quizzes = material.quizzes;
+          const isGenerating = generatingQuiz === material.id;
+          const materialFeedback =
+            feedback?.materialId === material.id ? feedback : null;
 
           return (
-            <View
-              key={material.id}
-              style={styles.materialSection}
-            >
+            <View key={material.id} style={styles.materialSection}>
               {/* MATERIAL CARD */}
 
               <View style={styles.materialCard}>
@@ -634,21 +556,13 @@ export default function PracticeScreen() {
                   </View>
 
                   <View style={styles.materialHeaderText}>
-                    <Text style={styles.materialEyebrow}>
-                      STUDY MATERIAL
-                    </Text>
+                    <Text style={styles.materialEyebrow}>STUDY MATERIAL</Text>
 
-                    <Text
-                      style={styles.materialTitle}
-                      numberOfLines={2}
-                    >
+                    <Text style={styles.materialTitle} numberOfLines={2}>
                       {material.title || material.fileName}
                     </Text>
 
-                    <Text
-                      style={styles.fileName}
-                      numberOfLines={1}
-                    >
+                    <Text style={styles.fileName} numberOfLines={1}>
                       {material.fileName}
                     </Text>
                   </View>
@@ -663,9 +577,11 @@ export default function PracticeScreen() {
                     />
 
                     <Text style={styles.quizCount}>
-                      {quizzes.length === 1
-                        ? '1 quiz disponibil'
-                        : `${quizzes.length} quizuri disponibile`}
+                      {quizzes.length === 0
+                        ? 'No quizzes yet'
+                        : quizzes.length === 1
+                          ? '1 quiz available'
+                          : `${quizzes.length} quizzes available`}
                     </Text>
                   </View>
 
@@ -675,115 +591,125 @@ export default function PracticeScreen() {
 
               {/* QUIZ LIST */}
 
-              <View style={styles.quizList}>
-                {quizzes.map((quiz, quizIndex) => {
-                  const questionCount = Array.isArray(
-                    quiz.questions
-                  )
-                    ? quiz.questions.length
-                    : 0;
+              {quizzes.length > 0 && (
+                <View style={styles.quizList}>
+                  {quizzes.map((quiz, quizIndex) => {
+                    const questionCount = questionCountOf(quiz);
+                    const playable = questionCount > 0;
 
-                  return (
-                    <View
-                      key={quiz.id}
-                      style={styles.quizCard}
-                    >
-                      <View style={styles.quizTopRow}>
-                        <View style={styles.quizNumber}>
-                          <Text style={styles.quizNumberText}>
-                            {String(quizIndex + 1).padStart(2, '0')}
-                          </Text>
-                        </View>
-
-                        <View style={styles.quizInfo}>
-                          <Text style={styles.quizEyebrow}>
-                            PRACTICE SET {quizIndex + 1}
-                          </Text>
-
-                          <Text
-                            style={styles.quizTitle}
-                            numberOfLines={2}
-                          >
-                            {quiz.title || `Quiz ${quizIndex + 1}`}
-                          </Text>
-
-                          <View style={styles.questionMeta}>
-                            <Clock3
-                              size={12}
-                              color={COLORS.muted}
-                              strokeWidth={1.8}
-                            />
-
-                            <Text style={styles.questionCount}>
-                              {questionCount} întrebări
+                    return (
+                      <View key={quiz.id} style={styles.quizCard}>
+                        <View style={styles.quizTopRow}>
+                          <View style={styles.quizNumber}>
+                            <Text style={styles.quizNumberText}>
+                              {String(quizIndex + 1).padStart(2, '0')}
                             </Text>
+                          </View>
+
+                          <View style={styles.quizInfo}>
+                            <Text style={styles.quizEyebrow}>
+                              PRACTICE SET {quizIndex + 1}
+                            </Text>
+
+                            <Text style={styles.quizTitle} numberOfLines={2}>
+                              {quiz.title || `Quiz ${quizIndex + 1}`}
+                            </Text>
+
+                            <View style={styles.questionMeta}>
+                              <Clock3
+                                size={12}
+                                color={COLORS.muted}
+                                strokeWidth={1.8}
+                              />
+
+                              <Text style={styles.questionCount}>
+                                {questionCount === 1
+                                  ? '1 question'
+                                  : `${questionCount} questions`}
+                              </Text>
+                            </View>
+                          </View>
+
+                          <View style={styles.quizDecoration}>
+                            <CheckCircle2
+                              size={18}
+                              color={COLORS.sageDark}
+                              strokeWidth={1.7}
+                            />
                           </View>
                         </View>
 
-                        <View style={styles.quizDecoration}>
-                          <CheckCircle2
-                            size={18}
-                            color={COLORS.sageDark}
-                            strokeWidth={1.7}
-                          />
+                        {/* QUIZ ACTIONS */}
+
+                        <View style={styles.buttonsRow}>
+                          <Pressable
+                            style={({ pressed }) => [
+                              styles.playButton,
+                              (!playable || pressed) && styles.buttonDimmed,
+                            ]}
+                            onPress={() => openQuiz(material, quiz, false)}
+                            disabled={!playable}
+                            accessibilityRole="button"
+                            accessibilityLabel={`Start ${quiz.title || `quiz ${quizIndex + 1}`}`}
+                            accessibilityState={{ disabled: !playable }}
+                          >
+                            <Play
+                              size={15}
+                              color="#FFFFFF"
+                              fill="#FFFFFF"
+                              strokeWidth={1.5}
+                            />
+
+                            <Text style={styles.playButtonText}>
+                              Start quiz
+                            </Text>
+                          </Pressable>
+
+                          <Pressable
+                            style={({ pressed }) => [
+                              styles.answersButton,
+                              (!playable || pressed) && styles.buttonDimmed,
+                            ]}
+                            onPress={() => openQuiz(material, quiz, true)}
+                            disabled={!playable}
+                            accessibilityRole="button"
+                            accessibilityLabel={`View answers for ${quiz.title || `quiz ${quizIndex + 1}`}`}
+                            accessibilityState={{ disabled: !playable }}
+                          >
+                            <CheckCircle2
+                              size={15}
+                              color={COLORS.lavenderDark}
+                              strokeWidth={1.8}
+                            />
+
+                            <Text style={styles.answersButtonText}>
+                              Answers
+                            </Text>
+                          </Pressable>
                         </View>
                       </View>
-
-                      {/* QUIZ ACTIONS */}
-
-                      <View style={styles.buttonsRow}>
-                        <Pressable
-                          style={styles.playButton}
-                          onPress={() =>
-                            startQuiz(material, quiz)
-                          }
-                        >
-                          <Play
-                            size={15}
-                            color="#FFFFFF"
-                            fill="#FFFFFF"
-                            strokeWidth={1.5}
-                          />
-
-                          <Text style={styles.playButtonText}>
-                            Începe quizul
-                          </Text>
-                        </Pressable>
-
-                        <Pressable
-                          style={styles.answersButton}
-                          onPress={() =>
-                            viewAnswers(material, quiz)
-                          }
-                        >
-                          <CheckCircle2
-                            size={15}
-                            color={COLORS.lavenderDark}
-                            strokeWidth={1.8}
-                          />
-
-                          <Text style={styles.answersButtonText}>
-                            Răspunsuri
-                          </Text>
-                        </Pressable>
-                      </View>
-                    </View>
-                  );
-                })}
-              </View>
+                    );
+                  })}
+                </View>
+              )}
 
               {/* GENERATE ANOTHER QUIZ */}
 
               <Pressable
                 style={[
                   styles.generateButton,
-                  generatingQuiz === material.id &&
-                    styles.generateButtonDisabled,
+                  quizzes.length === 0 && styles.generateButtonFlush,
+                  generatingQuiz !== null && styles.generateButtonDisabled,
                 ]}
                 onPress={() => generateAnotherQuiz(material)}
-                disabled={generatingQuiz === material.id}
+                disabled={generatingQuiz !== null}
+                accessibilityRole="button"
+                accessibilityState={{
+                  disabled: generatingQuiz !== null,
+                  busy: isGenerating,
+                }}
               >
-                {generatingQuiz === material.id ? (
+                {isGenerating ? (
                   <>
                     <ActivityIndicator
                       size="small"
@@ -791,7 +717,7 @@ export default function PracticeScreen() {
                     />
 
                     <Text style={styles.generateButtonText}>
-                      Se pregătește un quiz nou...
+                      Preparing a new quiz...
                     </Text>
                   </>
                 ) : (
@@ -803,7 +729,9 @@ export default function PracticeScreen() {
                     />
 
                     <Text style={styles.generateButtonText}>
-                      Generează alt quiz
+                      {quizzes.length === 0
+                        ? 'Create a quiz'
+                        : 'Generate another quiz'}
                     </Text>
 
                     <ChevronRight
@@ -814,6 +742,18 @@ export default function PracticeScreen() {
                   </>
                 )}
               </Pressable>
+
+              {materialFeedback && (
+                <Notice
+                  tone={materialFeedback.tone}
+                  message={materialFeedback.message}
+                  onDismiss={() => setFeedback(null)}
+                  style={[
+                    styles.materialNotice,
+                    quizzes.length === 0 && styles.generateButtonFlush,
+                  ]}
+                />
+              )}
             </View>
           );
         })}
@@ -821,11 +761,7 @@ export default function PracticeScreen() {
         {/* BOTTOM NOTE */}
 
         <View style={styles.bottomNote}>
-          <Sparkles
-            size={15}
-            color={COLORS.peachDark}
-            strokeWidth={1.7}
-          />
+          <Sparkles size={15} color={COLORS.peachDark} strokeWidth={1.7} />
 
           <Text style={styles.bottomNoteText}>
             Little steps, big progress.
@@ -856,6 +792,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 21,
     paddingTop: 19,
     paddingBottom: 35,
+  },
+
+  contentContainerCompact: {
+    paddingHorizontal: 16,
   },
 
   // HEADER
@@ -911,6 +851,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginLeft: 8,
+  },
+
+  topNotice: {
+    marginBottom: 18,
   },
 
   // SUMMARY CARD
@@ -1275,6 +1219,10 @@ const styles = StyleSheet.create({
     fontFamily: 'Nunito_700Bold',
   },
 
+  buttonDimmed: {
+    opacity: 0.6,
+  },
+
   // GENERATE BUTTON
 
   generateButton: {
@@ -1290,6 +1238,12 @@ const styles = StyleSheet.create({
     gap: 9,
     marginTop: 12,
     marginLeft: 9,
+    paddingHorizontal: 12,
+  },
+
+  generateButtonFlush: {
+    marginLeft: 0,
+    marginTop: 0,
   },
 
   generateButtonDisabled: {
@@ -1301,6 +1255,12 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: COLORS.lavenderDark,
     fontFamily: 'Nunito_700Bold',
+    flexShrink: 1,
+  },
+
+  materialNotice: {
+    marginTop: 10,
+    marginLeft: 9,
   },
 
   // EMPTY STATE
@@ -1311,6 +1271,17 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: 34,
     paddingBottom: 50,
+  },
+
+  errorContainer: {
+    flexGrow: 1,
+    width: '100%',
+    maxWidth: 560,
+    alignSelf: 'center',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 21,
+    paddingVertical: 40,
   },
 
   emptyIllustration: {
@@ -1358,6 +1329,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginBottom: 24,
     fontFamily: 'Nunito_400Regular',
+    maxWidth: 420,
   },
 
   emptyButton: {
@@ -1383,7 +1355,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 7,
     marginTop: 20,
-    padding: 8,
+    minHeight: 40,
+    paddingHorizontal: 10,
   },
 
   backToStudyText: {

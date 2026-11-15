@@ -1,25 +1,29 @@
-
-import React, { useMemo } from "react";
+import { router, useLocalSearchParams } from "expo-router";
 import {
-  Platform,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-  Pressable,
-} from "react-native";
-import { useLocalSearchParams, router } from "expo-router";
-import { goBack } from '@/lib/navigation';
-import {
-  ArrowLeft,
-  BookOpen,
-  Sparkles,
-  GraduationCap,
-  ChevronRight,
+    ArrowLeft,
+    BookOpen,
+    ChevronRight,
+    GraduationCap,
+    Sparkles,
 } from "lucide-react-native";
+import { useMemo } from "react";
+import {
+    Platform,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Text,
+    useWindowDimensions,
+    View,
+} from "react-native";
 
+import { COMPACT_BREAKPOINT } from "@/constants/palette";
+import { goBack } from "@/lib/navigation";
+
+// Shape returned by POST /api/study/generate.
 type StudyMaterial = {
   id?: number;
+  materialId?: number;
   fileName?: string;
   title?: string;
   summary?: string;
@@ -30,6 +34,8 @@ type StudyMaterial = {
 
 export default function SummaryScreen() {
   const params = useLocalSearchParams();
+  const { width } = useWindowDimensions();
+  const isCompact = width < COMPACT_BREAKPOINT;
 
   const data = useMemo(() => {
     if (!params.result) return null;
@@ -41,7 +47,7 @@ export default function SummaryScreen() {
 
       return JSON.parse(rawResult) as StudyMaterial;
     } catch (error) {
-      console.log("Eroare la citirea rezultatului:", error);
+      console.error("Could not read the summary result:", error);
       return null;
     }
   }, [params.result]);
@@ -54,59 +60,84 @@ export default function SummaryScreen() {
       params: {
         result: JSON.stringify(data),
       },
-    } as any);
+    });
   };
 
   if (!data) {
     return (
       <View style={styles.container}>
-        <View style={styles.header}>
-          <Pressable style={styles.backButton} onPress={() => goBack('/study')}>
+        <View style={[styles.header, isCompact && styles.compactPadding]}>
+          <Pressable
+            style={styles.backButton}
+            onPress={() => goBack("/study")}
+            accessibilityRole="button"
+            accessibilityLabel="Go back"
+          >
             <ArrowLeft size={22} color="#51446B" />
           </Pressable>
           <Text style={styles.headerTitle}>AI Summary</Text>
         </View>
 
-        <View style={styles.emptyCard}>
+        <View style={[styles.emptyCard, isCompact && styles.emptyCardCompact]}>
           <Sparkles size={32} color="#9B86C4" />
           <Text style={styles.emptyTitle}>No summary available</Text>
           <Text style={styles.emptyText}>
-            Upload a study material to generate your summary.
+            Upload a study material to generate your summary. Earlier
+            summaries are saved in AI summaries.
           </Text>
           <Pressable
             style={styles.button}
-            onPress={() => router.push("/study/upload" as any)}
+            onPress={() => router.push("/study/upload")}
+            accessibilityRole="button"
           >
             <Text style={styles.buttonText}>Upload material</Text>
+          </Pressable>
+          <Pressable
+            style={styles.linkButton}
+            onPress={() => router.push("/study/aisummary")}
+            accessibilityRole="button"
+          >
+            <Text style={styles.linkButtonText}>See saved summaries</Text>
           </Pressable>
         </View>
       </View>
     );
   }
 
-  return <SummaryContent data={data} openQuiz={openQuiz} />;
+  return (
+    <SummaryContent data={data} openQuiz={openQuiz} isCompact={isCompact} />
+  );
 }
 
 function SummaryContent({
   data,
   openQuiz,
+  isCompact,
 }: {
   data: StudyMaterial;
   openQuiz: () => void;
+  isCompact: boolean;
 }) {
   const title = data.title || data.fileName || "Study Summary";
   const summary = data.summary || "";
   const keyPoints = Array.isArray(data.keyPoints) ? data.keyPoints : [];
-  const hasQuiz = Boolean(data.quizId || (data.quiz && data.quiz.length > 0));
+  // The quiz screen needs the questions array to render anything.
+  const hasQuiz = Array.isArray(data.quiz) && data.quiz.length > 0;
+  const horizontalPadding = isCompact ? styles.compactPadding : null;
 
   return (
     <View style={styles.container}>
-      <View style={styles.header}>
-        <Pressable style={styles.backButton} onPress={() => goBack('/study')}>
+      <View style={[styles.header, horizontalPadding]}>
+        <Pressable
+          style={styles.backButton}
+          onPress={() => goBack("/study")}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
+        >
           <ArrowLeft size={22} color="#51446B" />
         </Pressable>
 
-        <View style={{ flex: 1 }}>
+        <View style={styles.headerText}>
           <Text style={styles.headerTitle}>AI Summary</Text>
           <Text style={styles.headerSubtitle}>Learn a little every day</Text>
         </View>
@@ -118,7 +149,7 @@ function SummaryContent({
 
       <ScrollView
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={styles.content}
+        contentContainerStyle={[styles.content, horizontalPadding]}
       >
         <View style={styles.titleCard}>
           <View style={styles.titleIcon}>
@@ -169,9 +200,16 @@ function SummaryContent({
             <Text style={styles.quizDescription}>
               Practice what you have learned with a quick quiz.
             </Text>
-            <Pressable style={styles.quizButton} onPress={openQuiz}>
+            <Pressable
+              style={({ pressed }) => [
+                styles.quizButton,
+                pressed && styles.pressed,
+              ]}
+              onPress={openQuiz}
+              accessibilityRole="button"
+            >
               <Text style={styles.quizButtonText}>Start quiz</Text>
-              <ChevronRight size={18} color="#FFFFFF" />
+              <ChevronRight size={18} color="#79649F" />
             </Pressable>
           </View>
         )}
@@ -191,6 +229,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 22,
     paddingTop: Platform.OS === "web" ? 25 : 55,
     paddingBottom: 20,
+  },
+  compactPadding: {
+    paddingHorizontal: 18,
+  },
+  headerText: {
+    flex: 1,
   },
   backButton: {
     width: 42,
@@ -349,6 +393,10 @@ const styles = StyleSheet.create({
     marginHorizontal: 22,
     marginTop: 30,
   },
+  emptyCardCompact: {
+    marginHorizontal: 18,
+    padding: 22,
+  },
   emptyTitle: {
     fontSize: 19,
     fontWeight: "700",
@@ -373,5 +421,19 @@ const styles = StyleSheet.create({
     color: "#FFFFFF",
     fontSize: 13,
     fontWeight: "700",
+  },
+  linkButton: {
+    marginTop: 10,
+    minHeight: 40,
+    paddingHorizontal: 12,
+    justifyContent: "center",
+  },
+  linkButtonText: {
+    color: "#8D78B7",
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  pressed: {
+    opacity: 0.85,
   },
 });

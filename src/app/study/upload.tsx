@@ -1,44 +1,35 @@
-
-import React, { useState } from 'react';
-
-import {
-  ActivityIndicator,
-  Alert,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
-
 import * as DocumentPicker from 'expo-document-picker';
 import { router } from 'expo-router';
-import { goBack } from '@/lib/navigation';
-import { useAuth0 } from 'react-native-auth0';
-
 import {
-  ArrowLeft,
-  BookOpen,
-  FileText,
-  FileImage,
-  FileUp,
-  Sparkles,
-  Brain,
-  ClipboardList,
-  Lightbulb,
-  PawPrint,
-  CheckCircle2,
-  X,
+    ArrowLeft,
+    BookOpen,
+    Brain,
+    CheckCircle2,
+    ClipboardList,
+    FileImage,
+    FileText,
+    FileUp,
+    Lightbulb,
+    PawPrint,
+    Sparkles,
+    X,
 } from 'lucide-react-native';
+import { useRef, useState } from 'react';
+import {
+    ActivityIndicator,
+    Platform,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Text,
+    useWindowDimensions,
+    View,
+} from 'react-native';
 
-const API_URL =
-  Platform.OS === 'android'
-    ? 'http://10.0.2.2:3001'
-    : 'http://localhost:3001';
-
-const API_AUDIENCE = 'https://paws-and-pages-api';
-const AUTH_SCOPE = 'openid profile email offline_access';
+import { Notice } from '@/components/ui/feedback';
+import { COMPACT_BREAKPOINT } from '@/constants/palette';
+import { getErrorMessage, useApi } from '@/lib/api';
+import { goBack } from '@/lib/navigation';
 
 const FILE_TYPES = [
   'application/pdf',
@@ -70,25 +61,21 @@ function getMimeType(filename: string) {
   return types[extension || ''] || 'application/octet-stream';
 }
 
-async function getResponseData(response: Response) {
-  const responseText = await response.text();
-
-  try {
-    return JSON.parse(responseText);
-  } catch {
-    return {
-      error: responseText || 'Serverul a returnat un răspuns invalid.',
-    };
-  }
-}
-
 export default function UploadScreen() {
-  const { getCredentials } = useAuth0();
+  const { request } = useApi();
+  const { width } = useWindowDimensions();
+  const isCompact = width < COMPACT_BREAKPOINT;
 
   const [loading, setLoading] = useState(false);
-  const [filename, setFilename] = useState('');
+  const [selectedFile, setSelectedFile] =
+    useState<DocumentPicker.DocumentPickerAsset | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  // Guards against a second upload starting before state updates land.
+  const busyRef = useRef(false);
 
   async function selectFile() {
+    if (busyRef.current) return;
+
     try {
       const result = await DocumentPicker.getDocumentAsync({
         type: FILE_TYPES,
@@ -100,134 +87,90 @@ export default function UploadScreen() {
 
       const file = result.assets[0];
 
-      setFilename(file.name);
+      setSelectedFile(file);
 
       await uploadFile(file);
-    } catch (error: any) {
-      console.error('Selection error:', error);
+    } catch (err) {
+      console.error('Selection error:', err);
 
-      Alert.alert(
-        'Ups!',
-        error.message || 'Nu am putut selecta fișierul.'
-      );
+      setError(getErrorMessage(err, "We couldn't open that file."));
     }
   }
 
-  async function uploadFile(
-    file: DocumentPicker.DocumentPickerAsset
-  ) {
+  async function uploadFile(file: DocumentPicker.DocumentPickerAsset) {
+    if (busyRef.current) return;
+    busyRef.current = true;
+
     setLoading(true);
+    setError(null);
 
     try {
-      console.log('Uploading:', file.name);
-      console.log('Platform:', Platform.OS);
-
       const formData = new FormData();
 
       if (Platform.OS === 'web') {
         if (!file.file) {
           throw new Error(
-            'Browserul nu a furnizat fișierul. Încearcă să îl selectezi din nou.'
+            "The browser didn't provide the file. Please choose it again."
           );
         }
 
         formData.append('file', file.file, file.name);
       } else {
-        formData.append(
-          'file',
-          {
-            uri: file.uri,
-            name: file.name,
-            type: file.mimeType || getMimeType(file.name),
-          } as any
-        );
+        formData.append('file', {
+          uri: file.uri,
+          name: file.name,
+          type: file.mimeType || getMimeType(file.name),
+        } as any);
       }
 
-      // Obținem tokenul Auth0 pentru API-ul Paws & Pages.
-      console.log('PASUL 1: Obținere token Auth0...');
-
-      const credentials = await getCredentials(
-        AUTH_SCOPE,
-        0,
-        {
-          audience: API_AUDIENCE,
-        }
-      );
-
-      if (!credentials?.accessToken) {
-        throw new Error(
-          'Sesiunea ta a expirat. Te rugăm să te autentifici din nou.'
-        );
-      }
-
-      console.log('PASUL 2: Token Auth0 obținut cu succes.');
-
-      // Trimitem fișierul către backend.
-      console.log('PASUL 3: Trimitere fișier către backend...');
-
-      const response = await fetch(
-        `${API_URL}/api/study/generate`,
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${credentials.accessToken}`,
-          },
-          body: formData,
-        }
-      );
-
-      const data = await getResponseData(response);
-
-      if (!response.ok) {
-        throw new Error(
-          data.error || 'Nu am putut procesa materialul.'
-        );
-      }
-
-      console.log('PASUL 4: Material procesat cu succes!');
-      console.log('Gemini response:', data);
+      // apiFetch leaves Content-Type unset for FormData so the multipart
+      // boundary is added automatically on web and native.
+      const data = await request('/api/study/generate', {
+        method: 'POST',
+        body: formData,
+      });
 
       router.push({
         pathname: '/study/summary',
         params: {
           result: JSON.stringify(data),
         },
-      } as any);
+      });
+    } catch (err) {
+      console.error('Upload error:', err);
 
-    } catch (error: any) {
-      console.error('Upload error:', error);
-
-      let message =
-        error.message ||
-        'A apărut o eroare la încărcarea materialului.';
-
-      if (
-        error instanceof TypeError ||
-        message.toLowerCase().includes('failed to fetch')
-      ) {
-        message =
-          'Nu am putut contacta serverul Paws & Pages. Verifică dacă backend-ul este pornit și încearcă din nou.';
-      }
-
-      Alert.alert(
-        'Nu am putut genera materialul',
-        message
+      setError(
+        getErrorMessage(
+          err,
+          'Something went wrong while uploading your material.'
+        )
       );
     } finally {
+      busyRef.current = false;
       setLoading(false);
     }
   }
 
+  const clearSelection = () => {
+    setSelectedFile(null);
+    setError(null);
+  };
+
   return (
     <View style={styles.screen}>
       <ScrollView
-        contentContainerStyle={styles.container}
+        contentContainerStyle={[
+          styles.container,
+          isCompact && styles.containerCompact,
+        ]}
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.header}>
           <Pressable
             style={styles.backButton}
             onPress={() => goBack('/study')}
+            accessibilityRole="button"
+            accessibilityLabel="Go back"
           >
             <ArrowLeft size={21} color="#655274" strokeWidth={2} />
           </Pressable>
@@ -246,8 +189,8 @@ export default function UploadScreen() {
             <Text style={styles.tagText}>YOUR STUDY SPACE</Text>
           </View>
 
-          <Text style={styles.title}>
-            Let's make
+          <Text style={[styles.title, isCompact && styles.titleCompact]}>
+            Let&apos;s make
             {'\n'}
             studying <Text style={styles.titleAccent}>easier.</Text>
           </Text>
@@ -282,6 +225,9 @@ export default function UploadScreen() {
             ]}
             onPress={selectFile}
             disabled={loading}
+            accessibilityRole="button"
+            accessibilityLabel="Choose a file to upload"
+            accessibilityState={{ disabled: loading, busy: loading }}
           >
             <View style={styles.fileIconRow}>
               <View
@@ -325,17 +271,20 @@ export default function UploadScreen() {
                 </Text>
 
                 <Text style={styles.dropDescription}>
-                  Laica is preparing your study material.
+                  Laica is preparing your summary and quiz. This can take up
+                  to a minute.
                 </Text>
               </>
             ) : (
               <>
+                {/* Drag & drop is not implemented, so the copy only
+                    promises what the button does. */}
                 <Text style={styles.dropTitle}>
-                  Drop your files here
+                  Pick a file to get started
                 </Text>
 
                 <Text style={styles.dropDescription}>
-                  or browse your device to choose a file
+                  Browse your device to choose a file
                 </Text>
 
                 <View style={styles.chooseButton}>
@@ -349,7 +298,7 @@ export default function UploadScreen() {
             )}
           </Pressable>
 
-          {!!filename && (
+          {!!selectedFile && (
             <View style={styles.selectedFile}>
               <View style={styles.selectedFileIcon}>
                 <CheckCircle2 size={18} color="#789B83" />
@@ -364,19 +313,36 @@ export default function UploadScreen() {
                   style={styles.filename}
                   numberOfLines={1}
                 >
-                  {filename}
+                  {selectedFile.name}
                 </Text>
               </View>
 
               {!loading && (
                 <Pressable
-                  onPress={() => setFilename('')}
-                  hitSlop={10}
+                  onPress={clearSelection}
+                  hitSlop={12}
+                  accessibilityRole="button"
+                  accessibilityLabel="Remove selected file"
+                  style={styles.clearButton}
                 >
                   <X size={18} color="#A18DAA" />
                 </Pressable>
               )}
             </View>
+          )}
+
+          {!!error && (
+            <Notice
+              tone="error"
+              title="We couldn't generate your material"
+              message={error}
+              actionLabel={selectedFile && !loading ? 'Try again' : undefined}
+              onAction={
+                selectedFile ? () => uploadFile(selectedFile) : undefined
+              }
+              onDismiss={() => setError(null)}
+              style={styles.errorNotice}
+            />
           )}
 
           <Text style={styles.supportedFormats}>
@@ -390,12 +356,18 @@ export default function UploadScreen() {
           </Text>
 
           <Text style={styles.sectionTitle}>
-            What you'll get
+            What you&apos;ll get
           </Text>
         </View>
 
         <View style={styles.featuresGrid}>
-          <View style={[styles.featureCard, styles.featurePink]}>
+          <View
+            style={[
+              styles.featureCard,
+              isCompact && styles.featureCardCompact,
+              styles.featurePink,
+            ]}
+          >
             <View
               style={[
                 styles.featureIcon,
@@ -414,7 +386,13 @@ export default function UploadScreen() {
             </Text>
           </View>
 
-          <View style={[styles.featureCard, styles.featurePurple]}>
+          <View
+            style={[
+              styles.featureCard,
+              isCompact && styles.featureCardCompact,
+              styles.featurePurple,
+            ]}
+          >
             <View
               style={[
                 styles.featureIcon,
@@ -433,7 +411,13 @@ export default function UploadScreen() {
             </Text>
           </View>
 
-          <View style={[styles.featureCard, styles.featureGreen]}>
+          <View
+            style={[
+              styles.featureCard,
+              isCompact && styles.featureCardCompact,
+              styles.featureGreen,
+            ]}
+          >
             <View
               style={[
                 styles.featureIcon,
@@ -448,11 +432,17 @@ export default function UploadScreen() {
             </Text>
 
             <Text style={styles.featureDescription}>
-              Five questions to test what you've learned.
+              Five questions to test what you&apos;ve learned.
             </Text>
           </View>
 
-          <View style={[styles.featureCard, styles.featurePeach]}>
+          <View
+            style={[
+              styles.featureCard,
+              isCompact && styles.featureCardCompact,
+              styles.featurePeach,
+            ]}
+          >
             <View
               style={[
                 styles.featureIcon,
@@ -483,7 +473,7 @@ export default function UploadScreen() {
             </Text>
 
             <Text style={styles.noteText}>
-              One page at a time. You're doing better than you think!
+              One page at a time. You&apos;re doing better than you think!
             </Text>
           </View>
         </View>
@@ -506,6 +496,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
     paddingTop: 52,
     paddingBottom: 35,
+  },
+
+  containerCompact: {
+    paddingHorizontal: 20,
+    paddingTop: 36,
   },
 
   header: {
@@ -571,6 +566,11 @@ const styles = StyleSheet.create({
     fontSize: 38,
     lineHeight: 47,
     color: '#594B68',
+  },
+
+  titleCompact: {
+    fontSize: 32,
+    lineHeight: 40,
   },
 
   titleAccent: {
@@ -678,6 +678,7 @@ const styles = StyleSheet.create({
     fontSize: 17,
     color: '#655574',
     marginBottom: 5,
+    textAlign: 'center',
   },
 
   dropDescription: {
@@ -740,6 +741,19 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
 
+  clearButton: {
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginVertical: -8,
+    marginRight: -8,
+  },
+
+  errorNotice: {
+    marginTop: 14,
+  },
+
   supportedFormats: {
     fontFamily: 'Nunito_800ExtraBold',
     fontSize: 9,
@@ -780,6 +794,11 @@ const styles = StyleSheet.create({
     minHeight: 155,
     borderRadius: 21,
     padding: 15,
+  },
+
+  featureCardCompact: {
+    width: '100%',
+    minHeight: 0,
   },
 
   featurePink: {

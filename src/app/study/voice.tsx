@@ -1,33 +1,34 @@
+import { useConversation } from '@elevenlabs/react-native';
+import { router, useLocalSearchParams } from 'expo-router';
+import {
+    ArrowLeft,
+    History,
+    Mic,
+    MicOff,
+    PawPrint,
+    PhoneOff,
+} from 'lucide-react-native';
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  Pressable,
-  SafeAreaView,
-  Platform,
-  PermissionsAndroid,
-  ActivityIndicator,
+    ActivityIndicator,
+    PermissionsAndroid,
+    Platform,
+    Pressable,
+    SafeAreaView,
+    ScrollView,
+    StyleSheet,
+    Text,
+    useWindowDimensions,
+    View,
 } from 'react-native';
-import { router, useLocalSearchParams } from 'expo-router';
-import { useAuth0 } from 'react-native-auth0';
-import { useConversation } from '@elevenlabs/react-native';
-import {
-  ArrowLeft,
-  History,
-  Mic,
-  MicOff,
-  PhoneOff,
-  PawPrint,
-} from 'lucide-react-native';
 
+import { Notice } from '@/components/ui/feedback';
+import { COMPACT_BREAKPOINT } from '@/constants/palette';
+import { getErrorMessage, useApi } from '@/lib/api';
+import { goBack } from '@/lib/navigation';
 import {
-  API_AUDIENCE,
-  API_URL,
-  AUTH_SCOPE,
-  saveVoiceConversation,
-  type VoiceMessage,
+    saveVoiceConversation,
+    type VoiceMessage,
 } from '@/lib/voiceConversations';
 
 type ActiveSession = {
@@ -91,7 +92,9 @@ type VoiceParams = {
 };
 
 export default function VoiceScreen() {
-  const { getCredentials } = useAuth0();
+  const { getAccessToken, request } = useApi();
+  const { width } = useWindowDimensions();
+  const isCompact = width < COMPACT_BREAKPOINT;
   // Optional: open this screen with book details, e.g.
   // router.push({ pathname: '/study/voice', params: { bookTitle, bookAuthor } })
   const params = useLocalSearchParams<VoiceParams>();
@@ -99,9 +102,12 @@ export default function VoiceScreen() {
   const [error, setError] = useState<string | null>(null);
   const [fetchingToken, setFetchingToken] = useState(false);
   const [saveState, setSaveState] = useState<SaveState>('idle');
+  const [saveError, setSaveError] = useState<string | null>(null);
   const scrollRef = useRef<React.ComponentRef<typeof ScrollView>>(null);
   // Kept in a ref so it is still readable when the screen unmounts.
   const sessionRef = useRef<ActiveSession | null>(null);
+  // Prevents a second start while the token request is still running.
+  const startingRef = useRef(false);
 
   // Saves the current session once. Called when the call ends and when
   // the user leaves the screen, whichever comes first.
@@ -114,17 +120,10 @@ export default function VoiceScreen() {
 
     session.saved = true;
     setSaveState('saving');
+    setSaveError(null);
 
     try {
-      const credentials = await getCredentials(AUTH_SCOPE, 0, {
-        audience: API_AUDIENCE,
-      });
-
-      if (!credentials?.accessToken) {
-        throw new Error('Could not obtain Auth0 access token.');
-      }
-
-      await saveVoiceConversation(credentials.accessToken, {
+      await saveVoiceConversation(await getAccessToken(), {
         elevenlabsConversationId: session.elevenlabsConversationId,
         bookTitle: session.bookTitle,
         messages: session.messages,
@@ -137,6 +136,9 @@ export default function VoiceScreen() {
     } catch (err) {
       console.error('Could not save voice conversation:', err);
       session.saved = false;
+      setSaveError(
+        getErrorMessage(err, 'Could not save this conversation.')
+      );
       setSaveState('failed');
     }
   };
@@ -192,6 +194,9 @@ export default function VoiceScreen() {
   }, [endSession]);
 
   const startConversation = async () => {
+    if (startingRef.current || connecting || connected) return;
+    startingRef.current = true;
+
     setError(null);
 
     try {
@@ -203,27 +208,19 @@ export default function VoiceScreen() {
 
       setFetchingToken(true);
 
-      const credentials = await getCredentials(AUTH_SCOPE, 0, {
-        audience: API_AUDIENCE,
-      });
-
-      if (!credentials?.accessToken) {
-        throw new Error('Could not obtain Auth0 access token.');
-      }
-
-      const response = await fetch(
-        `${API_URL}/api/elevenlabs/conversation-token`,
-        { headers: { Authorization: `Bearer ${credentials.accessToken}` } }
+      const data = await request<{ token?: string }>(
+        '/api/elevenlabs/conversation-token'
       );
 
-      const data = await response.json().catch(() => ({}));
-
-      if (!response.ok || !data.token) {
-        throw new Error(data.error || `Server error: ${response.status}`);
+      if (!data.token) {
+        throw new Error(
+          "The voice service didn't return a session token. Please try again."
+        );
       }
 
       setTranscript([]);
       setSaveState('idle');
+      setSaveError(null);
       sessionRef.current = {
         startedAt: new Date().toISOString(),
         elevenlabsConversationId: null,
@@ -253,10 +250,9 @@ export default function VoiceScreen() {
       });
     } catch (err) {
       console.error('Voice session error:', err);
-      setError(
-        err instanceof Error ? err.message : 'Could not start the conversation.'
-      );
+      setError(getErrorMessage(err, 'Could not start the conversation.'));
     } finally {
+      startingRef.current = false;
       setFetchingToken(false);
     }
   };
@@ -273,10 +269,12 @@ export default function VoiceScreen() {
 
   return (
     <SafeAreaView style={styles.safe}>
-      <View style={styles.container}>
+      <View style={[styles.container, isCompact && styles.containerCompact]}>
         <View style={styles.header}>
           <Pressable
-            onPress={() => router.push('/study')}
+            onPress={() => goBack('/study')}
+            accessibilityRole="button"
+            accessibilityLabel="Go back"
             style={({ pressed }) => [styles.iconButton, pressed && styles.pressed]}
           >
             <ArrowLeft size={20} color={COLORS.text} />
@@ -289,6 +287,7 @@ export default function VoiceScreen() {
 
           <Pressable
             onPress={() => router.push('/study/conversations')}
+            accessibilityRole="button"
             accessibilityLabel="Saved conversations"
             style={({ pressed }) => [
               styles.iconButton,
@@ -304,33 +303,48 @@ export default function VoiceScreen() {
           <View
             style={[
               styles.avatar,
+              isCompact && styles.avatarCompact,
               connected && styles.avatarActive,
               isSpeaking && styles.avatarSpeaking,
             ]}
           >
-            <PawPrint size={54} color={COLORS.darkPink} />
+            <PawPrint size={isCompact ? 44 : 54} color={COLORS.darkPink} />
           </View>
 
           <Text style={styles.title}>Your study buddy</Text>
-          <Text style={styles.status}>{statusLabel}</Text>
-          {error && <Text style={styles.error}>{error}</Text>}
-          {saveState === 'saving' && (
-            <Text style={styles.saveNote}>Saving conversation…</Text>
-          )}
-          {saveState === 'saved' && (
-            <Pressable onPress={() => router.push('/study/conversations')}>
-              <Text style={styles.saveNote}>
-                Saved to your conversations · View
-              </Text>
-            </Pressable>
-          )}
-          {saveState === 'failed' && (
-            <Pressable onPress={() => saveSession()}>
-              <Text style={styles.error}>
-                Could not save this conversation. Tap to try again.
-              </Text>
-            </Pressable>
-          )}
+          <Text style={styles.status} accessibilityLiveRegion="polite">
+            {statusLabel}
+          </Text>
+
+          <View style={styles.notices}>
+            {error && (
+              <Notice
+                tone="error"
+                message={error}
+                onDismiss={() => setError(null)}
+              />
+            )}
+            {saveState === 'saving' && (
+              <Text style={styles.saveNote}>Saving conversation…</Text>
+            )}
+            {saveState === 'saved' && (
+              <Notice
+                tone="success"
+                message="Saved to your conversations."
+                actionLabel="View"
+                onAction={() => router.push('/study/conversations')}
+              />
+            )}
+            {saveState === 'failed' && (
+              <Notice
+                tone="error"
+                title="Could not save this conversation"
+                message={saveError || 'Please try again.'}
+                actionLabel="Try again"
+                onAction={() => saveSession()}
+              />
+            )}
+          </View>
         </View>
 
         <ScrollView
@@ -366,6 +380,10 @@ export default function VoiceScreen() {
             <>
               <Pressable
                 onPress={() => setMuted(!isMuted)}
+                accessibilityRole="button"
+                accessibilityLabel={
+                  isMuted ? 'Unmute microphone' : 'Mute microphone'
+                }
                 style={({ pressed }) => [
                   styles.roundButton,
                   styles.secondaryButton,
@@ -381,6 +399,8 @@ export default function VoiceScreen() {
 
               <Pressable
                 onPress={() => endSession()}
+                accessibilityRole="button"
+                accessibilityLabel="End conversation"
                 style={({ pressed }) => [
                   styles.roundButton,
                   styles.endButton,
@@ -394,6 +414,8 @@ export default function VoiceScreen() {
             <Pressable
               onPress={startConversation}
               disabled={connecting}
+              accessibilityRole="button"
+              accessibilityState={{ disabled: connecting, busy: connecting }}
               style={({ pressed }) => [
                 styles.startButton,
                 (pressed || connecting) && styles.pressed,
@@ -429,6 +451,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
     paddingTop: 24,
     paddingBottom: 28,
+  },
+
+  containerCompact: {
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 20,
   },
 
   header: {
@@ -490,6 +518,13 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
 
+  avatarCompact: {
+    width: 96,
+    height: 96,
+    borderRadius: 48,
+    marginBottom: 12,
+  },
+
   avatarActive: {
     borderColor: COLORS.pink,
   },
@@ -503,6 +538,7 @@ const styles = StyleSheet.create({
     color: COLORS.text,
     fontSize: 28,
     fontFamily: 'PlayfairDisplay_700Bold',
+    textAlign: 'center',
   },
 
   status: {
@@ -510,21 +546,19 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontFamily: 'Nunito_600SemiBold',
     marginTop: 6,
+    textAlign: 'center',
   },
 
-  error: {
-    color: COLORS.danger,
-    fontSize: 12,
-    fontFamily: 'Nunito_700Bold',
+  notices: {
+    alignSelf: 'stretch',
+    gap: 8,
     marginTop: 10,
-    textAlign: 'center',
   },
 
   saveNote: {
     color: COLORS.purple,
     fontSize: 12,
     fontFamily: 'Nunito_700Bold',
-    marginTop: 10,
     textAlign: 'center',
   },
 

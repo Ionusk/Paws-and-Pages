@@ -1,27 +1,28 @@
-import React, { useEffect, useState } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  Pressable,
-  SafeAreaView,
-  ActivityIndicator,
-  Alert,
-  Platform,
-} from 'react-native';
-import { router, useLocalSearchParams } from 'expo-router';
-import { useAuth0 } from 'react-native-auth0';
+import { useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { ArrowLeft, Clock3, Trash2 } from 'lucide-react-native';
-
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  API_AUDIENCE,
-  AUTH_SCOPE,
-  deleteVoiceConversation,
-  formatDate,
-  formatDuration,
-  getVoiceConversation,
-  type VoiceConversation,
+    ActivityIndicator,
+    Pressable,
+    SafeAreaView,
+    ScrollView,
+    StyleSheet,
+    Text,
+    useWindowDimensions,
+    View,
+} from 'react-native';
+
+import { Notice, StateCard } from '@/components/ui/feedback';
+import { COMPACT_BREAKPOINT } from '@/constants/palette';
+import { getErrorMessage, useApi } from '@/lib/api';
+import { confirmAction } from '@/lib/feedback';
+import { goBack } from '@/lib/navigation';
+import {
+    deleteVoiceConversation,
+    formatDate,
+    formatDuration,
+    getVoiceConversation,
+    type VoiceConversation,
 } from '@/lib/voiceConversations';
 
 const COLORS = {
@@ -37,104 +38,100 @@ const COLORS = {
   danger: '#C96A7A',
 };
 
-function confirmDelete(): Promise<boolean> {
-  if (Platform.OS === 'web') {
-    return Promise.resolve(window.confirm('Delete this conversation?'));
-  }
-
-  return new Promise((resolve) => {
-    Alert.alert(
-      'Delete conversation',
-      'This conversation will be removed permanently.',
-      [
-        { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
-        { text: 'Delete', style: 'destructive', onPress: () => resolve(true) },
-      ],
-      { cancelable: true, onDismiss: () => resolve(false) }
-    );
-  });
-}
-
 export default function ConversationDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { getCredentials } = useAuth0();
+  const { getAccessToken } = useApi();
+  const { width } = useWindowDimensions();
+  const isCompact = width < COMPACT_BREAKPOINT;
+
   const [conversation, setConversation] = useState<VoiceConversation | null>(
     null
   );
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const getToken = async () => {
-    const credentials = await getCredentials(AUTH_SCOPE, 0, {
-      audience: API_AUDIENCE,
-    });
-
-    if (!credentials?.accessToken) {
-      throw new Error('Could not obtain Auth0 access token.');
-    }
-
-    return credentials.accessToken;
-  };
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const deletingRef = useRef(false);
+  const mountedRef = useRef(true);
 
   useEffect(() => {
-    let cancelled = false;
-
-    (async () => {
-      try {
-        const credentials = await getCredentials(AUTH_SCOPE, 0, {
-          audience: API_AUDIENCE,
-        });
-
-        if (!credentials?.accessToken) {
-          throw new Error('Could not obtain Auth0 access token.');
-        }
-
-        const data = await getVoiceConversation(credentials.accessToken, id);
-        if (!cancelled) setConversation(data);
-      } catch (err) {
-        console.error('Could not load conversation:', err);
-        if (!cancelled) {
-          setError(
-            err instanceof Error ? err.message : 'Could not load conversation.'
-          );
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-
+    mountedRef.current = true;
     return () => {
-      cancelled = true;
+      mountedRef.current = false;
     };
-  }, [getCredentials, id]);
+  }, []);
 
-  const goBack = () =>
-    router.canGoBack() ? router.back() : router.push('/study/conversations');
+  const load = useCallback(async () => {
+    if (!id) {
+      setLoadError("We couldn't find this conversation.");
+      setLoading(false);
+      return;
+    }
+
+    try {
+      setLoading(true);
+      setLoadError(null);
+
+      const data = await getVoiceConversation(await getAccessToken(), id);
+      if (mountedRef.current) setConversation(data);
+    } catch (err) {
+      console.error('Could not load conversation:', err);
+      if (mountedRef.current) {
+        setLoadError(getErrorMessage(err, 'Could not load conversation.'));
+      }
+    } finally {
+      if (mountedRef.current) setLoading(false);
+    }
+  }, [getAccessToken, id]);
+
+  useFocusEffect(
+    useCallback(() => {
+      load();
+    }, [load])
+  );
+
+  const leave = () => goBack('/study/conversations');
 
   const handleDelete = async () => {
-    if (!(await confirmDelete())) return;
+    if (deletingRef.current || !conversation) return;
+
+    const confirmed = await confirmAction({
+      title: 'Delete conversation',
+      message: 'This conversation will be removed permanently.',
+      confirmText: 'Delete',
+      destructive: true,
+    });
+
+    if (!confirmed) return;
+
+    deletingRef.current = true;
 
     try {
       setDeleting(true);
-      await deleteVoiceConversation(await getToken(), id);
-      goBack();
+      setDeleteError(null);
+      await deleteVoiceConversation(await getAccessToken(), conversation.id);
+      // The list reloads on focus, so the deleted chat disappears there.
+      leave();
     } catch (err) {
       console.error('Could not delete conversation:', err);
-      setError(
-        err instanceof Error ? err.message : 'Could not delete conversation.'
-      );
-      setDeleting(false);
+      if (mountedRef.current) {
+        setDeleteError(getErrorMessage(err, 'Could not delete conversation.'));
+        setDeleting(false);
+      }
+    } finally {
+      deletingRef.current = false;
     }
   };
 
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.scrollContent}>
-        <View style={styles.container}>
+        <View style={[styles.container, isCompact && styles.containerCompact]}>
           <View style={styles.header}>
             <Pressable
-              onPress={goBack}
+              onPress={leave}
+              accessibilityRole="button"
+              accessibilityLabel="Go back"
               style={({ pressed }) => [
                 styles.iconButton,
                 pressed && styles.pressed,
@@ -151,7 +148,12 @@ export default function ConversationDetailScreen() {
             <Pressable
               onPress={handleDelete}
               disabled={!conversation || deleting}
+              accessibilityRole="button"
               accessibilityLabel="Delete conversation"
+              accessibilityState={{
+                disabled: !conversation || deleting,
+                busy: deleting,
+              }}
               style={({ pressed }) => [
                 styles.iconButton,
                 styles.deleteButton,
@@ -166,14 +168,19 @@ export default function ConversationDetailScreen() {
             </Pressable>
           </View>
 
-          {loading ? (
-            <ActivityIndicator color={COLORS.darkPink} style={styles.loader} />
-          ) : error && !conversation ? (
-            <Text style={styles.errorText}>{error}</Text>
+          {loading || (loadError && !conversation) ? (
+            <StateCard
+              loading={loading}
+              loadingText="Loading conversation..."
+              error={loadError}
+              onRetry={load}
+            />
           ) : conversation ? (
             <>
               <View style={styles.intro}>
-                <Text style={styles.title}>{conversation.title}</Text>
+                <Text style={[styles.title, isCompact && styles.titleCompact]}>
+                  {conversation.title}
+                </Text>
                 <View style={styles.meta}>
                   <Text style={styles.metaText}>
                     {formatDate(conversation.startedAt)}
@@ -183,35 +190,54 @@ export default function ConversationDetailScreen() {
                     {formatDuration(conversation.durationSeconds)}
                   </Text>
                 </View>
-                {error && <Text style={styles.errorText}>{error}</Text>}
               </View>
 
-              <View style={styles.transcript}>
-                {conversation.messages.map((message, index) => (
-                  <View
-                    key={index}
-                    style={[
-                      styles.bubbleWrap,
-                      message.role === 'user'
-                        ? styles.userWrap
-                        : styles.agentWrap,
-                    ]}
-                  >
-                    <Text style={styles.speaker}>
-                      {message.role === 'user' ? 'You' : 'Laica'}
-                    </Text>
+              {deleteError && (
+                <Notice
+                  tone="error"
+                  message={deleteError}
+                  onDismiss={() => setDeleteError(null)}
+                  style={styles.notice}
+                />
+              )}
+
+              <View
+                style={[
+                  styles.transcript,
+                  isCompact && styles.transcriptCompact,
+                ]}
+              >
+                {conversation.messages.length === 0 ? (
+                  <Text style={styles.emptyText}>
+                    This conversation doesn&apos;t have any messages.
+                  </Text>
+                ) : (
+                  conversation.messages.map((message, index) => (
                     <View
+                      key={index}
                       style={[
-                        styles.bubble,
+                        styles.bubbleWrap,
                         message.role === 'user'
-                          ? styles.userBubble
-                          : styles.agentBubble,
+                          ? styles.userWrap
+                          : styles.agentWrap,
                       ]}
                     >
-                      <Text style={styles.bubbleText}>{message.text}</Text>
+                      <Text style={styles.speaker}>
+                        {message.role === 'user' ? 'You' : 'Laica'}
+                      </Text>
+                      <View
+                        style={[
+                          styles.bubble,
+                          message.role === 'user'
+                            ? styles.userBubble
+                            : styles.agentBubble,
+                        ]}
+                      >
+                        <Text style={styles.bubbleText}>{message.text}</Text>
+                      </View>
                     </View>
-                  </View>
-                ))}
+                  ))
+                )}
               </View>
             </>
           ) : null}
@@ -238,6 +264,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
     paddingTop: 24,
     paddingBottom: 35,
+  },
+
+  containerCompact: {
+    paddingHorizontal: 16,
   },
 
   header: {
@@ -282,16 +312,8 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
 
-  loader: {
-    marginTop: 40,
-  },
-
-  errorText: {
-    color: COLORS.danger,
-    fontSize: 13,
-    fontFamily: 'Nunito_700Bold',
-    textAlign: 'center',
-    marginTop: 10,
+  notice: {
+    marginBottom: 16,
   },
 
   intro: {
@@ -306,9 +328,15 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 
+  titleCompact: {
+    fontSize: 22,
+  },
+
   meta: {
     flexDirection: 'row',
     alignItems: 'center',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
     gap: 6,
     marginTop: 8,
   },
@@ -326,6 +354,17 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
     padding: 18,
     gap: 12,
+  },
+
+  transcriptCompact: {
+    padding: 14,
+  },
+
+  emptyText: {
+    color: COLORS.muted,
+    fontSize: 13,
+    fontFamily: 'Nunito_400Regular',
+    textAlign: 'center',
   },
 
   bubbleWrap: {

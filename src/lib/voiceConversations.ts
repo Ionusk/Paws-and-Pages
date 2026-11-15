@@ -1,13 +1,8 @@
-import { Platform } from 'react-native';
+import { apiRequest } from './api';
 
-export const API_URL =
-  process.env.EXPO_PUBLIC_API_URL ||
-  (Platform.OS === 'android'
-    ? 'http://10.0.2.2:3001'
-    : 'http://localhost:3001');
-
-export const API_AUDIENCE = 'https://paws-and-pages-api';
-export const AUTH_SCOPE = 'openid profile email';
+// API settings now live in src/lib/api.ts; re-exported so existing imports
+// keep working.
+export { API_AUDIENCE, API_URL, AUTH_SCOPE } from './api';
 
 export type VoiceMessage = {
   role: 'user' | 'agent';
@@ -43,34 +38,11 @@ export type NewVoiceConversation = {
   startedAt: string;
 };
 
-async function request(
-  path: string,
-  accessToken: string,
-  options: RequestInit = {}
-) {
-  const response = await fetch(`${API_URL}${path}`, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${accessToken}`,
-      ...options.headers,
-    },
-  });
-
-  const data = await response.json().catch(() => ({}));
-
-  if (!response.ok || !data.success) {
-    throw new Error(data.error || `Server error: ${response.status}`);
-  }
-
-  return data;
-}
-
 export async function saveVoiceConversation(
   accessToken: string,
   conversation: NewVoiceConversation
 ): Promise<number> {
-  const data = await request('/api/voice/conversations', accessToken, {
+  const data = await apiRequest('/api/voice/conversations', accessToken, {
     method: 'POST',
     body: JSON.stringify(conversation),
   });
@@ -81,7 +53,8 @@ export async function saveVoiceConversation(
 export async function listVoiceConversations(
   accessToken: string
 ): Promise<VoiceConversationSummary[]> {
-  const data = await request('/api/voice/conversations', accessToken);
+  const data = await apiRequest('/api/voice/conversations', accessToken);
+
   return data.conversations;
 }
 
@@ -89,10 +62,11 @@ export async function getVoiceConversation(
   accessToken: string,
   id: string | number
 ): Promise<VoiceConversation> {
-  const data = await request(
+  const data = await apiRequest(
     `/api/voice/conversations/${encodeURIComponent(String(id))}`,
     accessToken
   );
+
   return data.conversation;
 }
 
@@ -100,7 +74,7 @@ export async function deleteVoiceConversation(
   accessToken: string,
   id: string | number
 ): Promise<void> {
-  await request(
+  await apiRequest(
     `/api/voice/conversations/${encodeURIComponent(String(id))}`,
     accessToken,
     { method: 'DELETE' }

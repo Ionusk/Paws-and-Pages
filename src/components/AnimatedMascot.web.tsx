@@ -1,6 +1,5 @@
-import React, { useEffect } from 'react';
-import { StyleSheet } from 'react-native';
 import { useVideoPlayer, VideoView } from 'expo-video';
+import { useEffect } from 'react';
 
 import type { MascotAnimation } from '@/constants/skins';
 import { useSkinVideo } from './SkinProvider';
@@ -8,6 +7,8 @@ import { SkinVideo } from './SkinVideo';
 
 type AnimatedMascotProps = {
   animation: MascotAnimation;
+  /** Width and height in points. Defaults to 300. */
+  size?: number;
 };
 
 const videos = {
@@ -15,7 +16,7 @@ const videos = {
   sleepy: require('../../assets/video/laicasleepy.webm'),
 };
 
-export function AnimatedMascot({ animation }: AnimatedMascotProps) {
+export function AnimatedMascot({ animation, size = 300 }: AnimatedMascotProps) {
   // Equipped shop skin (Hogwarts, Graduation...) replaces the classic look.
   const skinVideo = useSkinVideo(animation);
 
@@ -24,15 +25,15 @@ export function AnimatedMascot({ animation }: AnimatedMascotProps) {
       <SkinVideo
         key={skinVideo.key}
         source={skinVideo.source}
-        style={styles.video}
+        style={{ width: size, height: size, backgroundColor: 'transparent' }}
       />
     );
   }
 
-  return <ClassicMascot animation={animation} />;
+  return <ClassicMascot animation={animation} size={size} />;
 }
 
-function ClassicMascot({ animation }: AnimatedMascotProps) {
+function ClassicMascot({ animation, size = 300 }: AnimatedMascotProps) {
   const player = useVideoPlayer(videos[animation], (player) => {
     player.loop = true;
     player.muted = true;
@@ -48,17 +49,11 @@ function ClassicMascot({ animation }: AnimatedMascotProps) {
   return (
     <VideoView
       player={player}
-      style={styles.video}
+      style={{ width: size, height: size, backgroundColor: 'transparent' }}
       nativeControls={false}
       contentFit="contain"
+      accessible
+      accessibilityLabel="Laica, the Paws & Pages mascot"
     />
   );
 }
-
-const styles = StyleSheet.create({
-  video: {
-    width: 300,
-    height: 300,
-    backgroundColor: 'transparent',
-  },
-});

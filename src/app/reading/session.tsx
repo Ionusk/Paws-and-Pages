@@ -1,23 +1,29 @@
 
-  import React, { useEffect, useState } from 'react';
-  import {
-    View,
-    Text,
-    StyleSheet,
-    SafeAreaView,
-    TouchableOpacity,
-    ScrollView,
-    useWindowDimensions,
-  } from 'react-native';
-import { goBack } from '@/lib/navigation';
   import {
     ArrowLeft,
+    BookOpen,
+    Check,
     Pause,
     Play,
-    Check,
     Timer,
-    BookOpen,
-  } from 'lucide-react-native';
+} from 'lucide-react-native';
+import { useEffect, useState } from 'react';
+import {
+    ActivityIndicator,
+    SafeAreaView,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    useWindowDimensions,
+    View,
+} from 'react-native';
+
+import { Notice } from '@/components/ui/feedback';
+import { getErrorMessage, useApi } from '@/lib/api';
+import { confirmAction } from '@/lib/feedback';
+import { goBack } from '@/lib/navigation';
+import { saveReadingSession } from '@/lib/readingApi';
 
   import { AnimatedMascot } from '../../components/AnimatedMascot';
 
@@ -48,9 +54,15 @@ import { goBack } from '@/lib/navigation';
     const { width } = useWindowDimensions();
     const isWideLayout = width >= 760;
 
+    const { getAccessToken } = useApi();
+
     const [elapsedSeconds, setElapsedSeconds] = useState(0);
     const [isRunning, setIsRunning] = useState(true);
     const [isFinished, setIsFinished] = useState(false);
+    const [saveState, setSaveState] = useState<
+      'idle' | 'saving' | 'saved' | 'error'
+    >('idle');
+    const [saveError, setSaveError] = useState('');
 
     useEffect(() => {
       if (!isRunning || isFinished) return;
@@ -66,9 +78,49 @@ import { goBack } from '@/lib/navigation';
       setIsRunning((previous) => !previous);
     };
 
+    const saveSession = async (durationSeconds: number) => {
+      if (saveState === 'saving' || saveState === 'saved') return;
+
+      try {
+        setSaveState('saving');
+        setSaveError('');
+
+        await saveReadingSession(durationSeconds, await getAccessToken());
+
+        setSaveState('saved');
+      } catch (error) {
+        console.error('Reading session save error:', error);
+
+        setSaveState('error');
+        setSaveError(
+          getErrorMessage(error, "We couldn't save this reading session.")
+        );
+      }
+    };
+
     const handleFinish = () => {
       setIsRunning(false);
       setIsFinished(true);
+
+      if (elapsedSeconds > 0) {
+        saveSession(elapsedSeconds);
+      }
+    };
+
+    const handleBack = async () => {
+      if (!isFinished && elapsedSeconds > 0) {
+        const leave = await confirmAction({
+          title: 'Leave this session?',
+          message:
+            'Your reading time is only saved when you tap "Finish session". If you leave now, this session will be lost.',
+          confirmText: 'Leave',
+          destructive: true,
+        });
+
+        if (!leave) return;
+      }
+
+      goBack('/reading');
     };
 
     return (
@@ -82,7 +134,9 @@ import { goBack } from '@/lib/navigation';
             <TouchableOpacity
               style={styles.backButton}
               activeOpacity={0.8}
-              onPress={() => goBack('/reading')}
+              onPress={handleBack}
+              accessibilityRole="button"
+              accessibilityLabel="Back to reading"
             >
               <ArrowLeft size={19} color={COLORS.dark} />
               <Text style={styles.backButtonText}>
@@ -122,7 +176,10 @@ import { goBack } from '@/lib/navigation';
                 ]}
               >
                 <View style={styles.videoContainer}>
-                  <AnimatedMascot animation="original" />
+                  <AnimatedMascot
+                    animation="original"
+                    size={width < 400 ? 240 : 300}
+                  />
                 </View>
 
                 <Text style={styles.mascotTitle}>
@@ -244,10 +301,44 @@ import { goBack } from '@/lib/navigation';
                       {formatTime(elapsedSeconds)}
                     </Text>
 
+                    {elapsedSeconds === 0 ? (
+                      <Notice
+                        tone="info"
+                        message="This session was too short to save."
+                        style={styles.saveNotice}
+                      />
+                    ) : saveState === 'saving' ? (
+                      <View style={styles.savingRow}>
+                        <ActivityIndicator color={COLORS.accent} />
+                        <Text style={styles.savingText}>
+                          Saving your reading time...
+                        </Text>
+                      </View>
+                    ) : saveState === 'saved' ? (
+                      <Notice
+                        tone="success"
+                        message="Saved to your reading history. It now counts toward your quests."
+                        style={styles.saveNotice}
+                      />
+                    ) : saveState === 'error' ? (
+                      <Notice
+                        tone="error"
+                        message={saveError}
+                        actionLabel="Try again"
+                        onAction={() => saveSession(elapsedSeconds)}
+                        style={styles.saveNotice}
+                      />
+                    ) : null}
+
                     <TouchableOpacity
-                      style={styles.backHomeButton}
+                      style={[
+                        styles.backHomeButton,
+                        saveState === 'saving' && styles.disabledButton,
+                      ]}
                       activeOpacity={0.85}
                       onPress={() => goBack('/reading')}
+                      disabled={saveState === 'saving'}
+                      accessibilityRole="button"
                     >
                       <BookOpen
                         size={18}
@@ -526,7 +617,26 @@ import { goBack } from '@/lib/navigation';
 
     finishedContainer: {
       alignItems: 'center',
+      alignSelf: 'stretch',
       marginTop: 25,
+    },
+    saveNotice: {
+      alignSelf: 'stretch',
+      marginTop: 14,
+    },
+    savingRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 10,
+      marginTop: 14,
+    },
+    savingText: {
+      color: COLORS.text,
+      fontSize: 12,
+      fontFamily: 'Nunito_700Bold',
+    },
+    disabledButton: {
+      opacity: 0.6,
     },
 
     finishedTitle: {

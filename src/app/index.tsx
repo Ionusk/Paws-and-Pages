@@ -1,34 +1,52 @@
 
-import React, { useCallback, useRef, useState } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  Pressable,
-  SafeAreaView,
-  ScrollView,
-  ActivityIndicator,
-  Platform,
-} from 'react-native';
-import { useFocusEffect, useRouter } from 'expo-router';
-import { useAuth0 } from 'react-native-auth0';
+import { COMPACT_BREAKPOINT } from '@/constants/palette';
 import {
   CUSTOM_SCHEME,
   clearLoginTime,
   consumeLoginReturn,
 } from '@/lib/authSession';
+import { useFocusEffect, useRouter } from 'expo-router';
 import {
   BookOpen,
-  GraduationCap,
-  Pencil,
   Flower2,
+  GraduationCap,
+  LogOut,
   PawPrint,
+  Pencil,
   Sparkles,
 } from 'lucide-react-native';
+import { useCallback, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  Platform,
+  Pressable,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+  useWindowDimensions,
+} from 'react-native';
+import { useAuth0 } from 'react-native-auth0';
 import { AnimatedMascot } from '../components/AnimatedMascot';
+
+const FEATURES = {
+  study: {
+    title: 'Make studying easier!',
+    text: 'Upload your courses, transform your notes into AI-powered summaries and test your knowledge with personalized quizzes.',
+    footer: 'Create an account and start learning with Laica!',
+  },
+  reading: {
+    title: 'Your reading journey awaits!',
+    text: 'Track your books, time your reading sessions and keep your whole bookshelf in one cozy place.',
+    footer: 'Create an account and join our reading community!',
+  },
+};
 
 export default function WelcomeScreen() {
   const router = useRouter();
+  const { width } = useWindowDimensions();
+  const isCompact = width < COMPACT_BREAKPOINT + 260;
 
   const [studyHovered, setStudyHovered] = useState(false);
   const [readingHovered, setReadingHovered] = useState(false);
@@ -37,6 +55,7 @@ export default function WelcomeScreen() {
   const { user, isLoading, clearSession } = useAuth0();
   const hasUser = Boolean(user);
   const [leaving, setLeaving] = useState(false);
+  const [redirecting, setRedirecting] = useState(false);
   // Read the "just logged in" flag once per visit. The effect below can run
   // several times (Auth0 refreshes `user` when a token is requested), and a
   // re-run must not mistake the login return for a normal visit.
@@ -45,43 +64,75 @@ export default function WelcomeScreen() {
     loginReturnRef.current = consumeLoginReturn();
   }
 
-  // Every time this screen is shown: if someone is logged in, log them out.
-  // Exception: on web, Auth0 lands here right after login, so in that case
-  // continue to /login, which syncs the account and opens /home.
+  const handleLogout = useCallback(async () => {
+    try {
+      setLeaving(true);
+      clearLoginTime();
+
+      await clearSession(
+        {},
+        Platform.OS === 'web' ? undefined : { customScheme: CUSTOM_SCHEME }
+      );
+    } catch (error) {
+      console.error('Logout error:', error);
+    } finally {
+      setLeaving(false);
+    }
+  }, [clearSession]);
+
+  // Every time this screen is shown while logged in, log the user out.
+  // Exception: on web, Auth0 sends the browser back to "/" right after
+  // login; then continue to /login, which syncs the account and opens /home.
   useFocusEffect(
     useCallback(() => {
-      if (isLoading) {
-        return;
-      }
-
-      if (!hasUser) {
+      if (isLoading || !hasUser) {
         return;
       }
 
       if (loginReturnRef.current) {
+        setRedirecting(true);
         router.replace('/login');
         return;
       }
 
-      setLeaving(true);
-      clearLoginTime();
-
-      clearSession(
-        {},
-        Platform.OS === 'web' ? undefined : { customScheme: CUSTOM_SCHEME }
-      )
-        .catch((error) => console.error('Logout error:', error))
-        .finally(() => setLeaving(false));
-    }, [isLoading, hasUser, clearSession, router])
+      handleLogout();
+    }, [isLoading, hasUser, router, handleLogout])
   );
 
-  if (isLoading || leaving || (user && Platform.OS === 'web')) {
+  if (isLoading || leaving || redirecting || (hasUser && Platform.OS === 'web')) {
     return (
       <SafeAreaView style={[styles.safeArea, styles.loading]}>
         <ActivityIndicator size="large" color="#927BA0" />
+        <Text style={styles.loadingText}>
+          {leaving ? 'Logging you out...' : 'Getting your paws ready...'}
+        </Text>
       </SafeAreaView>
     );
   }
+
+  const displayName = user?.name || user?.nickname;
+
+  const renderTooltip = (
+    feature: keyof typeof FEATURES,
+    positionStyle: object
+  ) => {
+    const content = FEATURES[feature];
+
+    return (
+      <View
+        pointerEvents="none"
+        style={
+          isCompact
+            ? styles.inlineTooltip
+            : [styles.infoTooltip, positionStyle]
+        }
+      >
+        <Text style={styles.tooltipTitle}>{content.title}</Text>
+        <Text style={styles.tooltipText}>{content.text}</Text>
+        {!user && <Text style={styles.tooltipFooter}>{content.footer}</Text>}
+      </View>
+    );
+  };
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -89,7 +140,7 @@ export default function WelcomeScreen() {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        <View style={styles.container}>
+        <View style={[styles.container, isCompact && styles.containerCompact]}>
           {/* Decorative background */}
           <View style={styles.blobTop} pointerEvents="none" />
           <View style={styles.blobBottom} pointerEvents="none" />
@@ -111,25 +162,40 @@ export default function WelcomeScreen() {
           {/* Welcome text */}
           <View style={styles.intro}>
             <Text style={styles.eyebrow}>WELCOME TO</Text>
-            <Text style={styles.heading}>Laica's little world</Text>
+            <Text style={styles.heading}>Laica’s little world</Text>
             <Text style={styles.subtitle}>
               A cozy space to study, read and grow.
             </Text>
           </View>
 
           {/* Mascot */}
-          <View style={styles.mascotContainer}>
-            <AnimatedMascot animation="original" />
+          <View
+            style={[
+              styles.mascotContainer,
+              isCompact && styles.mascotContainerCompact,
+            ]}
+          >
+            <AnimatedMascot
+              animation="original"
+              size={isCompact ? 220 : 300}
+            />
           </View>
 
           {/* Main features */}
-          <View style={styles.cardsContainer} pointerEvents="box-none">
+          <View
+            style={[
+              styles.cardsContainer,
+              isCompact && styles.cardsContainerCompact,
+            ]}
+            pointerEvents="box-none"
+          >
             {/* Study card */}
             <Pressable
               style={({ pressed }) => [
                 styles.featureCard,
                 styles.studyCard,
-                styles.studyPosition,
+                !isCompact && styles.studyPosition,
+                isCompact && styles.featureCardCompact,
                 studyHovered && styles.studyHovered,
                 pressed && styles.cardPressed,
                 { cursor: 'pointer' as any },
@@ -138,6 +204,9 @@ export default function WelcomeScreen() {
               onHoverOut={() => setStudyHovered(false)}
               onPress={() => setStudyHovered(!studyHovered)}
               accessibilityRole="button"
+              accessibilityLabel="Study. Upload notes, learn and practice"
+              accessibilityHint="Shows more about the Study section"
+              accessibilityState={{ expanded: studyHovered }}
             >
               <View style={styles.illustrationCircle}>
                 <GraduationCap size={43} color="#927BA0" strokeWidth={1.7} />
@@ -156,25 +225,7 @@ export default function WelcomeScreen() {
                 <Text style={styles.cardTagText}>LEARN ✦</Text>
               </View>
 
-              {studyHovered && (
-                <View
-                  pointerEvents="none"
-                  style={[styles.infoTooltip, styles.studyTooltip]}
-                >
-                  <Text style={styles.tooltipTitle}>
-                    Make studying easier!
-                  </Text>
-
-                  <Text style={styles.tooltipText}>
-                    Upload your courses, transform your notes into AI-powered
-                    summaries and test your knowledge with personalized quizzes.
-                  </Text>
-
-                  <Text style={styles.tooltipFooter}>
-                    Create an account and start learning with Laica!
-                  </Text>
-                </View>
-              )}
+              {studyHovered && renderTooltip('study', styles.studyTooltip)}
             </Pressable>
 
             {/* Reading card */}
@@ -182,7 +233,8 @@ export default function WelcomeScreen() {
               style={({ pressed }) => [
                 styles.featureCard,
                 styles.readingCard,
-                styles.readingPosition,
+                !isCompact && styles.readingPosition,
+                isCompact && styles.featureCardCompact,
                 readingHovered && styles.readingHovered,
                 pressed && styles.cardPressed,
                 { cursor: 'pointer' as any },
@@ -191,6 +243,9 @@ export default function WelcomeScreen() {
               onHoverOut={() => setReadingHovered(false)}
               onPress={() => setReadingHovered(!readingHovered)}
               accessibilityRole="button"
+              accessibilityLabel="Reading. Track books, share and reflect"
+              accessibilityHint="Shows more about the Reading section"
+              accessibilityState={{ expanded: readingHovered }}
             >
               <View style={styles.illustrationCircle}>
                 <BookOpen size={43} color="#B77D88" strokeWidth={1.7} />
@@ -209,38 +264,28 @@ export default function WelcomeScreen() {
                 <Text style={styles.cardTagText}>DREAM ♡</Text>
               </View>
 
-              {readingHovered && (
-                <View
-                  pointerEvents="none"
-                  style={[styles.infoTooltip, styles.readingTooltip]}
-                >
-                  <Text style={styles.tooltipTitle}>
-                    Your reading journey awaits!
-                  </Text>
-
-                  <Text style={styles.tooltipText}>
-                    Track your books, record your progress, write reviews,
-                    save favorite quotes and share your reading moments
-                    with friends.
-                  </Text>
-
-                  <Text style={styles.tooltipFooter}>
-                    Create an account and join our reading community!
-                  </Text>
-                </View>
-              )}
+              {readingHovered &&
+                renderTooltip('reading', styles.readingTooltip)}
             </Pressable>
           </View>
 
           {/* Bottom section */}
-          <View style={styles.bottomSection}>
+          <View
+            style={[
+              styles.bottomSection,
+              isCompact && styles.bottomSectionCompact,
+            ]}
+          >
             <Text style={styles.bottomTitle}>
-              Your next chapter starts here.
+              {user && displayName
+                ? `Welcome back, ${displayName}!`
+                : 'Your next chapter starts here.'}
             </Text>
 
             <Pressable
               style={({ pressed }) => [
                 styles.button,
+                isCompact && styles.buttonCompact,
                 buttonHovered && styles.buttonHovered,
                 pressed && styles.buttonPressed,
                 { cursor: 'pointer' as any },
@@ -249,20 +294,39 @@ export default function WelcomeScreen() {
               onHoverOut={() => setButtonHovered(false)}
               onPress={() => router.push('/login')}
               accessibilityRole="button"
+              accessibilityLabel={
+                user ? "Continue to Laica's World" : "Join Laica's World"
+              }
             >
               <View style={styles.buttonContent} pointerEvents="none">
-                <View>
+                <View style={styles.buttonTextGroup}>
                   <Text style={styles.buttonSmall}>
-                    YOUR NEXT CHAPTER
+                    {user ? 'YOU ARE SIGNED IN' : 'YOUR NEXT CHAPTER'}
                   </Text>
                   <Text style={styles.buttonText}>
-                    Join Laica's World →
+                    {user ? 'Continue to my world →' : 'Join Laica\'s World →'}
                   </Text>
                 </View>
 
                 <PawPrint size={27} color="#F6C8D4" strokeWidth={1.8} />
               </View>
             </Pressable>
+
+            {user && (
+              <Pressable
+                onPress={handleLogout}
+                style={({ pressed }) => [
+                  styles.switchAccount,
+                  pressed && styles.cardPressed,
+                ]}
+                accessibilityRole="button"
+              >
+                <LogOut size={14} color="#806B87" />
+                <Text style={styles.switchAccountText}>
+                  Not you? Log out
+                </Text>
+              </Pressable>
+            )}
 
             <Text style={styles.footer}>
               made with love, paws & pages ♡
@@ -285,6 +349,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
 
+  loadingText: {
+    color: '#806B87',
+    fontSize: 13,
+    fontFamily: 'Nunito_600SemiBold',
+    marginTop: 14,
+  },
+
   scrollContent: {
     flexGrow: 1,
   },
@@ -296,6 +367,10 @@ const styles = StyleSheet.create({
     paddingTop: 20,
     paddingBottom: 24,
     overflow: 'hidden',
+  },
+
+  containerCompact: {
+    paddingHorizontal: 20,
   },
 
   blobTop: {
@@ -392,12 +467,26 @@ const styles = StyleSheet.create({
     transform: [{ translateY: 47 }],
   },
 
+  mascotContainerCompact: {
+    height: 200,
+    transform: [],
+    marginTop: 8,
+  },
+
   cardsContainer: {
     width: '60%',
     flexDirection: 'row',
     gap: 370,
     marginTop: 0,
     zIndex: 2,
+  },
+
+  cardsContainerCompact: {
+    width: '100%',
+    maxWidth: 420,
+    flexDirection: 'column',
+    gap: 14,
+    marginTop: 10,
   },
 
   featureCard: {
@@ -414,6 +503,12 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.10,
     shadowRadius: 10,
     elevation: 4,
+  },
+
+  featureCardCompact: {
+    flex: 0,
+    minHeight: 0,
+    paddingVertical: 22,
   },
 
   studyCard: {
@@ -473,6 +568,14 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     elevation: 12,
     zIndex: 20,
+  },
+
+  inlineTooltip: {
+    marginTop: 14,
+    padding: 14,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.85)',
+    alignSelf: 'stretch',
   },
 
   studyTooltip: {
@@ -567,15 +670,22 @@ const styles = StyleSheet.create({
     elevation: 100,
   },
 
+  bottomSectionCompact: {
+    transform: [],
+    marginTop: 26,
+  },
+
   bottomTitle: {
     color: '#493653',
     fontSize: 14,
     fontFamily: 'PlayfairDisplay_700Bold',
     marginBottom: 13,
+    textAlign: 'center',
   },
 
   button: {
     width: '30%',
+    minWidth: 300,
     minHeight: 90,
     backgroundColor: '#493653',
     borderRadius: 20,
@@ -592,12 +702,23 @@ const styles = StyleSheet.create({
     zIndex: 101,
   },
 
+  buttonCompact: {
+    width: '100%',
+    minWidth: 0,
+    maxWidth: 420,
+  },
+
   buttonContent: {
     width: '100%',
     minHeight: 40,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    gap: 12,
+  },
+
+  buttonTextGroup: {
+    flexShrink: 1,
   },
 
   buttonHovered: {
@@ -624,6 +745,21 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 17,
     fontFamily: 'Nunito_800ExtraBold',
+  },
+
+  switchAccount: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+  },
+
+  switchAccountText: {
+    color: '#806B87',
+    fontSize: 12,
+    fontFamily: 'Nunito_700Bold',
   },
 
   footer: {

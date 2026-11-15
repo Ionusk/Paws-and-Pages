@@ -1,29 +1,30 @@
-import React, { useState } from 'react';
-import { useAuth0 } from 'react-native-auth0';
-import {
-  View,
-  Text,
-  TextInput,
-  StyleSheet,
-  SafeAreaView,
-  ScrollView,
-  TouchableOpacity,
-  Image,
-  ActivityIndicator,
-  Alert,
-} from 'react-native';
-import { router } from 'expo-router';
-import { goBack } from '@/lib/navigation';
-import {
-  ArrowLeft,
-  BookPlus,
-  BookOpen,
-  ImagePlus,
-  X,
-} from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
+import {
+    ArrowLeft,
+    BookOpen,
+    BookPlus,
+    ImagePlus,
+    X,
+} from 'lucide-react-native';
+import { useState } from 'react';
+import {
+    ActivityIndicator,
+    Image,
+    SafeAreaView,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    useWindowDimensions,
+    View
+} from 'react-native';
 
-import { addReadingBook, CoverUpload } from './readingStorage';
+import { Notice } from '@/components/ui/feedback';
+import { COMPACT_BREAKPOINT } from '@/constants/palette';
+import { getErrorMessage, useApi } from '@/lib/api';
+import { goBack } from '@/lib/navigation';
+import { addReadingBook, type CoverUpload } from '@/lib/readingApi';
 
 const COLORS = {
   background: '#E9DDF2',
@@ -37,11 +38,20 @@ const COLORS = {
   border: '#DED0E8',
 };
 
-const AUTH_SCOPE = 'openid profile email offline_access';
-const API_AUDIENCE = 'https://paws-and-pages-api';
+
+type FieldErrors = {
+  title?: string;
+  pages?: string;
+  currentPage?: string;
+};
 
 export default function AddBookScreen() {
-  const { getCredentials } = useAuth0();
+  const { getAccessToken } = useApi();
+  const { width } = useWindowDimensions();
+  const isCompact = width < COMPACT_BREAKPOINT;
+
+  const [errors, setErrors] = useState<FieldErrors>({});
+  const [formError, setFormError] = useState('');
 
   const [title, setTitle] = useState('');
   const [author, setAuthor] = useState('');
@@ -53,12 +63,13 @@ export default function AddBookScreen() {
   // SELECT COVER FROM GALLERY
   const pickCover = async () => {
     try {
+      setFormError('');
+
       const permission =
         await ImagePicker.requestMediaLibraryPermissionsAsync();
 
       if (!permission.granted) {
-        Alert.alert(
-          'Permission required',
+        setFormError(
           'Please allow access to your photo gallery to select a book cover.'
         );
         return;
@@ -83,10 +94,7 @@ export default function AddBookScreen() {
     } catch (error) {
       console.error('IMAGE PICKER ERROR:', error);
 
-      Alert.alert(
-        'Error',
-        'Could not open your photo gallery.'
-      );
+      setFormError("We couldn't open your photo gallery. Please try again.");
     }
   };
 
@@ -96,40 +104,36 @@ export default function AddBookScreen() {
 
     const trimmedTitle = title.trim();
     const trimmedAuthor = author.trim();
-    const pages = Number(totalPages);
-    const current = Number(currentPage);
+    const pages = Number(totalPages.trim());
+    const current = Number(currentPage.trim() || '0');
+
+    const nextErrors: FieldErrors = {};
 
     if (!trimmedTitle) {
-      Alert.alert('Missing title', 'Please enter the book title.');
-      return;
+      nextErrors.title = 'Please enter the book title.';
     }
 
-    if (!Number.isInteger(pages) || pages <= 0) {
-      Alert.alert('Invalid pages', 'Please enter a valid number of pages.');
-      return;
+    if (!totalPages.trim() || !Number.isInteger(pages) || pages <= 0) {
+      nextErrors.pages = 'Enter the total number of pages (a whole number above 0).';
     }
 
-    if (
-      !Number.isInteger(current) ||
-      current < 0 ||
-      current > pages
-    ) {
-      Alert.alert('Invalid page', 'Please enter a valid current page.');
+    if (!Number.isInteger(current) || current < 0) {
+      nextErrors.currentPage = 'Enter a whole number, or 0 if you haven\'t started.';
+    } else if (!nextErrors.pages && current > pages) {
+      nextErrors.currentPage = `The current page can't be higher than ${pages}.`;
+    }
+
+    setErrors(nextErrors);
+    setFormError('');
+
+    if (Object.keys(nextErrors).length > 0) {
       return;
     }
 
     try {
       setSaving(true);
 
-      const credentials = await getCredentials(
-        AUTH_SCOPE,
-        0,
-        { audience: API_AUDIENCE }
-      );
-
-      if (!credentials.accessToken) {
-        throw new Error('Could not obtain Auth0 access token.');
-      }
+      const accessToken = await getAccessToken();
 
       const newBook = {
         title: trimmedTitle,
@@ -139,21 +143,15 @@ export default function AddBookScreen() {
         coverUrl: null,
       };
 
-      await addReadingBook(
-        newBook,
-        credentials.accessToken,
-        cover
-      );
+      await addReadingBook(newBook, accessToken, cover);
 
-      router.replace('/reading');
+      // The reading screen reloads its books when it regains focus.
+      goBack('/reading');
     } catch (error) {
       console.error('Error saving book:', error);
 
-      Alert.alert(
-        'Could not add book',
-        error instanceof Error
-          ? error.message
-          : 'Something went wrong. Please try again.'
+      setFormError(
+        getErrorMessage(error, 'Something went wrong. Please try again.')
       );
     } finally {
       setSaving(false);
@@ -163,7 +161,10 @@ export default function AddBookScreen() {
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView
-        contentContainerStyle={styles.container}
+        contentContainerStyle={[
+          styles.container,
+          isCompact && styles.containerCompact,
+        ]}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
@@ -171,6 +172,9 @@ export default function AddBookScreen() {
         <TouchableOpacity
           style={styles.backButton}
           onPress={() => goBack('/reading')}
+          disabled={saving}
+          accessibilityRole="button"
+          accessibilityLabel="Back to reading"
         >
           <ArrowLeft size={19} color={COLORS.dark} />
 
@@ -209,6 +213,9 @@ export default function AddBookScreen() {
             style={styles.coverPicker}
             onPress={pickCover}
             activeOpacity={0.8}
+            disabled={saving}
+            accessibilityRole="button"
+            accessibilityLabel={cover ? 'Change book cover' : 'Upload book cover (optional)'}
           >
             {cover ? (
               <View style={styles.coverPreviewContainer}>
@@ -268,13 +275,20 @@ export default function AddBookScreen() {
           </Text>
 
           <TextInput
-            style={styles.input}
+            style={[styles.input, errors.title && styles.inputError]}
             value={title}
-            onChangeText={setTitle}
+            onChangeText={(value) => {
+              setTitle(value);
+              if (errors.title) setErrors((e) => ({ ...e, title: undefined }));
+            }}
             placeholder="e.g. A Court of Mist and Fury"
             placeholderTextColor={COLORS.muted}
             maxLength={100}
+            accessibilityLabel="Book title, required"
           />
+          {errors.title ? (
+            <Text style={styles.fieldError}>{errors.title}</Text>
+          ) : null}
 
           {/* AUTHOR */}
           <Text style={styles.inputLabel}>
@@ -296,13 +310,22 @@ export default function AddBookScreen() {
           </Text>
 
           <TextInput
-            style={styles.input}
+            style={[styles.input, errors.pages && styles.inputError]}
             value={totalPages}
-            onChangeText={setTotalPages}
+            onChangeText={(value) => {
+              setTotalPages(value.replace(/[^0-9]/g, ''));
+              if (errors.pages) setErrors((e) => ({ ...e, pages: undefined }));
+            }}
             placeholder="e.g. 640"
             placeholderTextColor={COLORS.muted}
             keyboardType="number-pad"
+            inputMode="numeric"
+            maxLength={6}
+            accessibilityLabel="Total number of pages, required"
           />
+          {errors.pages ? (
+            <Text style={styles.fieldError}>{errors.pages}</Text>
+          ) : null}
 
           {/* CURRENT PAGE */}
           <Text style={styles.inputLabel}>
@@ -310,17 +333,39 @@ export default function AddBookScreen() {
           </Text>
 
           <TextInput
-            style={styles.input}
+            style={[styles.input, errors.currentPage && styles.inputError]}
             value={currentPage}
-            onChangeText={setCurrentPage}
+            onChangeText={(value) => {
+              setCurrentPage(value.replace(/[^0-9]/g, ''));
+              if (errors.currentPage) {
+                setErrors((e) => ({ ...e, currentPage: undefined }));
+              }
+            }}
             placeholder="0"
             placeholderTextColor={COLORS.muted}
             keyboardType="number-pad"
+            inputMode="numeric"
+            maxLength={6}
+            accessibilityLabel="Current page"
           />
+          {errors.currentPage ? (
+            <Text style={styles.fieldError}>{errors.currentPage}</Text>
+          ) : null}
 
           <Text style={styles.helperText}>
-            You can leave it at 0 if you haven't started reading yet.
+            Leave it at 0 if you haven’t started yet. Set it to the last page
+            if you’ve already finished the book. You can’t change it after
+            saving yet, so double-check it.
           </Text>
+
+          {formError ? (
+            <Notice
+              tone="error"
+              message={formError}
+              onDismiss={() => setFormError('')}
+              style={styles.formNotice}
+            />
+          ) : null}
 
           {/* ADD BUTTON */}
           <TouchableOpacity
@@ -331,9 +376,14 @@ export default function AddBookScreen() {
             onPress={saveBook}
             disabled={saving}
             activeOpacity={0.8}
+            accessibilityRole="button"
+            accessibilityState={{ disabled: saving, busy: saving }}
           >
             {saving ? (
-              <ActivityIndicator color={COLORS.white} />
+              <>
+                <ActivityIndicator color={COLORS.white} />
+                <Text style={styles.addButtonText}>SAVING YOUR BOOK...</Text>
+              </>
             ) : (
               <>
                 <BookPlus
@@ -553,9 +603,31 @@ const styles = StyleSheet.create({
     outlineStyle: 'none',
   } as any,
 
+  inputError: {
+    borderWidth: 1,
+    borderColor: '#D98A97',
+    backgroundColor: '#FFF5F6',
+  },
+
+  fieldError: {
+    color: '#B44B58',
+    fontSize: 11,
+    fontFamily: 'Nunito_700Bold',
+    marginTop: 6,
+  },
+
+  formNotice: {
+    marginTop: 18,
+  },
+
+  containerCompact: {
+    paddingHorizontal: 18,
+  },
+
   helperText: {
     color: COLORS.muted,
     fontSize: 10,
+    lineHeight: 15,
     fontFamily: 'Nunito_400Regular',
     marginTop: 7,
   },
