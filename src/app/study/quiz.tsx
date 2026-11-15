@@ -566,6 +566,8 @@ const styles = StyleSheet.create({
   },
 
   navigation: {
+    // Room for the account button (top-right corner).
+    paddingRight: 58,
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",

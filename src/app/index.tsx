@@ -75,11 +75,21 @@ export default function WelcomeScreen() {
         {},
         Platform.OS === 'web' ? undefined : { customScheme: CUSTOM_SCHEME }
       );
+
+      if (Platform.OS === 'web') {
+        // On web, clearSession forgets the user right away but the browser
+        // only leaves for Auth0's logout page a moment later, and then comes
+        // back here. Keep the spinner up until then: if the page stayed
+        // usable, a tap on "Join" would open /login and the logout redirect
+        // would then throw the user back to this screen.
+        setTimeout(() => setLeaving(false), 10000);
+        return;
+      }
     } catch (error) {
       console.error('Logout error:', error);
-    } finally {
-      setLeaving(false);
     }
+
+    setLeaving(false);
   }, [clearSession]);
 
   // Every time this screen is shown while logged in, log the user out.

@@ -441,6 +441,8 @@ const styles = StyleSheet.create({
     backgroundColor: "#F9F7FC",
   },
   header: {
+    // Room for the account button (top-right corner).
+    paddingRight: 58,
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: 22,

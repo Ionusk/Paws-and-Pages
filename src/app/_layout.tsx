@@ -3,6 +3,7 @@ import { ConversationProvider } from "@elevenlabs/react-native";
 import { Stack, useRouter, useSegments } from "expo-router";
 
 import { ProfileProvider, useProfile } from "@/lib/profile";
+import { AccountButton } from "../components/AccountButton";
 import { SkinProvider } from "../components/SkinProvider";
 import * as SplashScreen from "expo-splash-screen";
 import { useEffect, useState } from "react";
@@ -134,6 +135,7 @@ function RootNavigator() {
   }
 
   return (
+    <View style={{ flex: 1 }}>
     <Stack
       screenOptions={{
         headerShown: false,
@@ -150,6 +152,8 @@ function RootNavigator() {
         ))}
       </Stack.Protected>
     </Stack>
+    <AccountButton />
+    </View>
   );
 }
 

@@ -460,6 +460,8 @@ const styles = StyleSheet.create({
   },
 
   header: {
+    // Room for the account button (top-right corner).
+    paddingRight: 58,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',

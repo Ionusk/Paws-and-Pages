@@ -529,6 +529,8 @@ const styles = StyleSheet.create({
     alignSelf: "center",
   },
   header: {
+    // Room for the account button (top-right corner).
+    paddingRight: 58,
     flexDirection: "row",
     alignItems: "center",
     marginBottom: 30,
