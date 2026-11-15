@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import "dotenv/config";
 import { CdpClient } from "@coinbase/cdp-sdk";
 import {
@@ -27,24 +28,35 @@ const FEE_BUFFER_LAMPORTS = 20000;
 const DAY_START = `(date_trunc('day', NOW() AT TIME ZONE '${TIME_ZONE}') AT TIME ZONE '${TIME_ZONE}')`;
 const WEEK_START = `(date_trunc('week', NOW() AT TIME ZONE '${TIME_ZONE}') AT TIME ZONE '${TIME_ZONE}')`;
 
-// Progress queries: $1 = users.id. Each returns one row with column "v".
-export const QUESTS = [
-  {
-    id: "read",
-    period: "daily",
-    reward: 15,
-    target: 20,
-    progressSql: `SELECT COALESCE(SUM(duration_seconds), 0) / 60 AS v
-      FROM reading_sessions
-      WHERE user_id = $1::text AND created_at >= ${DAY_START}`,
-  },
+// Pool of possible quests. Each period the server picks QUESTS_PER_PERIOD of
+// them for every user (see getActiveQuests). Progress queries get $1 = users.id
+// and return one row with column "v". Ids are stable: they are stored in
+// quest_claims and quest_rerolls.
+const SESSION_MINUTES = (since) => `SELECT COALESCE(SUM(duration_seconds), 0) / 60 AS v
+  FROM reading_sessions WHERE user_id = $1::text AND created_at >= ${since}`;
+const SESSION_PAGES = (since) => `SELECT COALESCE(SUM(GREATEST(end_page - start_page, 0)), 0) AS v
+  FROM reading_sessions WHERE user_id = $1::text AND created_at >= ${since}`;
+const QUIZZES = (since, extra = "") => `SELECT COUNT(*) AS v
+  FROM quiz_results WHERE user_id = $1::int AND completed_at >= ${since} ${extra}`;
+const MATERIALS = (since) => `SELECT COUNT(*) AS v
+  FROM study_materials WHERE user_id = $1::int AND created_at >= ${since}`;
+const VOICE_CHATS = (since, extra = "") => `SELECT COUNT(*) AS v
+  FROM voice_conversations
+  WHERE user_id = $1::int AND created_at >= ${since}
+    AND messages @> '[{"role": "user"}]'::jsonb ${extra}`;
+
+export const QUEST_POOL = [
+  // ---------------- DAILY ----------------
+  { id: "read10", period: "daily", reward: 10, target: 10, progressSql: SESSION_MINUTES(DAY_START) },
+  { id: "read", period: "daily", reward: 15, target: 20, progressSql: SESSION_MINUTES(DAY_START) },
+  { id: "read30", period: "daily", reward: 25, target: 30, progressSql: SESSION_MINUTES(DAY_START) },
+  { id: "pages20", period: "daily", reward: 15, target: 20, progressSql: SESSION_PAGES(DAY_START) },
   {
     id: "book",
     period: "daily",
     reward: 10,
     target: 1,
-    progressSql: `SELECT COUNT(*) AS v
-      FROM reading_books
+    progressSql: `SELECT COUNT(*) AS v FROM reading_books
       WHERE user_id = $1::text AND created_at >= ${DAY_START}`,
   },
   {
@@ -52,42 +64,142 @@ export const QUESTS = [
     period: "daily",
     reward: 20,
     target: 1,
-    progressSql: `SELECT COUNT(*) AS v
-      FROM reading_sessions
-      WHERE user_id = $1::text
-        AND created_at >= ${DAY_START}
+    progressSql: `SELECT COUNT(*) AS v FROM reading_sessions
+      WHERE user_id = $1::text AND created_at >= ${DAY_START}
         AND LENGTH(TRIM(COALESCE(impressions, ''))) > 0`,
   },
+  { id: "quiz1", period: "daily", reward: 10, target: 1, progressSql: QUIZZES(DAY_START) },
+  {
+    id: "perfect",
+    period: "daily",
+    reward: 25,
+    target: 1,
+    progressSql: QUIZZES(DAY_START, "AND total_questions > 0 AND score >= total_questions"),
+  },
+  {
+    id: "listen",
+    period: "daily",
+    reward: 10,
+    target: 1,
+    progressSql: `SELECT COUNT(*) AS v FROM study_audio
+      WHERE user_id = $1::int AND last_listened_at >= ${DAY_START}`,
+  },
+  {
+    id: "tutor",
+    period: "daily",
+    reward: 15,
+    target: 1,
+    progressSql: VOICE_CHATS(DAY_START, "AND title LIKE 'Lesson:%'"),
+  },
+  { id: "upload1", period: "daily", reward: 15, target: 1, progressSql: MATERIALS(DAY_START) },
+
+  // ---------------- WEEKLY ----------------
   {
     id: "consistency",
     period: "weekly",
     reward: 60,
     target: 5,
     progressSql: `SELECT COUNT(DISTINCT (created_at AT TIME ZONE '${TIME_ZONE}')::date) AS v
-      FROM reading_sessions
-      WHERE user_id = $1::text AND created_at >= ${WEEK_START}`,
+      FROM reading_sessions WHERE user_id = $1::text AND created_at >= ${WEEK_START}`,
   },
+  { id: "pages150", period: "weekly", reward: 70, target: 150, progressSql: SESSION_PAGES(WEEK_START) },
   {
     id: "finish",
     period: "weekly",
     reward: 100,
     target: 1,
-    progressSql: `SELECT COUNT(*) AS v
-      FROM reading_books
-      WHERE user_id = $1::text
-        AND status = 'finished'
-        AND finished_at >= ${WEEK_START}`,
+    progressSql: `SELECT COUNT(*) AS v FROM reading_books
+      WHERE user_id = $1::text AND status = 'finished' AND finished_at >= ${WEEK_START}`,
+  },
+  { id: "study", period: "weekly", reward: 45, target: 3, progressSql: QUIZZES(WEEK_START) },
+  {
+    id: "quiz80",
+    period: "weekly",
+    reward: 40,
+    target: 1,
+    progressSql: QUIZZES(WEEK_START, "AND total_questions > 0 AND score * 5 >= total_questions * 4"),
+  },
+  { id: "upload2", period: "weekly", reward: 40, target: 2, progressSql: MATERIALS(WEEK_START) },
+  { id: "voice3", period: "weekly", reward: 45, target: 3, progressSql: VOICE_CHATS(WEEK_START) },
+  {
+    id: "campusPublish",
+    period: "weekly",
+    reward: 50,
+    target: 1,
+    campusOnly: true,
+    progressSql: `SELECT COUNT(*) AS v FROM campus_books
+      WHERE owner_id = $1::int AND deleted_at IS NULL AND created_at >= ${WEEK_START}`,
   },
   {
-    id: "study",
+    id: "campusBorrow",
     period: "weekly",
-    reward: 45,
-    target: 3,
-    progressSql: `SELECT COUNT(*) AS v
-      FROM quiz_results
-      WHERE user_id = $1::int AND completed_at >= ${WEEK_START}`,
+    reward: 50,
+    target: 1,
+    campusOnly: true,
+    progressSql: `SELECT COUNT(*) AS v FROM campus_borrow_requests
+      WHERE requester_id = $1::int AND status IN ('accepted', 'returned')
+        AND created_at >= ${WEEK_START}`,
   },
 ];
+
+/** Kept for scripts that imported the old fixed list. */
+export const QUESTS = QUEST_POOL;
+
+const QUESTS_PER_PERIOD = 3;
+
+function rank(seed) {
+  return crypto.createHash("sha256").update(seed).digest("hex");
+}
+
+/** Quests this user may get (Campus quests only for verified UPT students). */
+async function eligiblePool(userId) {
+  const result = await pool.query(
+    "SELECT student_email_verified_at IS NOT NULL AS campus FROM users WHERE id = $1",
+    [userId]
+  );
+  const campus = Boolean(result.rows[0]?.campus);
+
+  return QUEST_POOL.filter((quest) => campus || !quest.campusOnly);
+}
+
+/**
+ * The user's quests for the current day and week: the same all period,
+ * different for every user, with today's reroll applied.
+ */
+async function getActiveQuests(userId, periods) {
+  const candidates = await eligiblePool(userId);
+
+  const rerolls = await pool.query(
+    `SELECT period, old_quest_id, new_quest_id FROM quest_rerolls
+     WHERE user_id = $1 AND period_key = ANY($2::text[])
+     ORDER BY created_at`,
+    [userId, [periods.daily, periods.weekly]]
+  );
+
+  const active = [];
+
+  for (const period of ["daily", "weekly"]) {
+    const key = periods[period];
+    let ids = candidates
+      .filter((quest) => quest.period === period)
+      .sort((a, b) => rank(`${userId}:${key}:${a.id}`).localeCompare(rank(`${userId}:${key}:${b.id}`)))
+      .slice(0, QUESTS_PER_PERIOD)
+      .map((quest) => quest.id);
+
+    for (const row of rerolls.rows) {
+      if (row.period === period && ids.includes(row.old_quest_id)) {
+        ids = ids.map((id) => (id === row.old_quest_id ? row.new_quest_id : id));
+      }
+    }
+
+    for (const id of ids) {
+      const quest = QUEST_POOL.find((item) => item.id === id);
+      if (quest) active.push(quest);
+    }
+  }
+
+  return { active, candidates };
+}
 
 async function getPeriodKeys() {
   const result = await pool.query(
@@ -324,8 +436,15 @@ export function createQuestsRouter({ requireAuth }) {
         [user.id, [periods.daily, periods.weekly]]
       );
 
+      const { active } = await getActiveQuests(user.id, periods);
+
+      const reroll = await pool.query(
+        "SELECT 1 FROM quest_rerolls WHERE user_id = $1 AND day_key = $2",
+        [user.id, periods.daily]
+      );
+
       const quests = await Promise.all(
-        QUESTS.map(async (quest) => {
+        active.map(async (quest) => {
           const claim = claims.rows.find(
             (row) =>
               row.quest_id === quest.id && row.period_key === periods[quest.period]
@@ -342,7 +461,79 @@ export function createQuestsRouter({ requireAuth }) {
         })
       );
 
-      res.json({ success: true, periods, quests });
+      res.json({
+        success: true,
+        periods,
+        quests,
+        rerollAvailable: reroll.rows.length === 0,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // POST /api/quests/:questId/reroll – schimbă un quest (o dată pe zi)
+  router.post("/:questId/reroll", async (req, res, next) => {
+    try {
+      const user = await getUser(req);
+
+      if (!user) {
+        return res.status(404).json({ success: false, error: "Utilizatorul nu există." });
+      }
+
+      const periods = await getPeriodKeys();
+      const { active, candidates } = await getActiveQuests(user.id, periods);
+      const quest = active.find((item) => item.id === req.params.questId);
+
+      if (!quest) {
+        return res.status(404).json({ success: false, error: "You don't have this quest right now." });
+      }
+
+      const periodKey = periods[quest.period];
+
+      const claims = await pool.query(
+        `SELECT quest_id FROM quest_claims
+         WHERE user_id = $1 AND period_key = $2 AND status <> 'failed'`,
+        [user.id, periodKey]
+      );
+      const claimed = new Set(claims.rows.map((row) => row.quest_id));
+
+      if (claimed.has(quest.id)) {
+        return res.status(409).json({ success: false, error: "This quest's reward was already claimed." });
+      }
+
+      const activeIds = new Set(active.map((item) => item.id));
+      const replacement = candidates
+        .filter(
+          (item) =>
+            item.period === quest.period &&
+            !activeIds.has(item.id) &&
+            !claimed.has(item.id)
+        )
+        .sort((a, b) =>
+          rank(`${user.id}:${periods.daily}:reroll:${a.id}`).localeCompare(
+            rank(`${user.id}:${periods.daily}:reroll:${b.id}`)
+          )
+        )[0];
+
+      if (!replacement) {
+        return res.status(409).json({ success: false, error: "There is no other quest to swap in." });
+      }
+
+      const saved = await pool.query(
+        `INSERT INTO quest_rerolls
+           (user_id, day_key, period, period_key, old_quest_id, new_quest_id)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (user_id, day_key) DO NOTHING
+         RETURNING id`,
+        [user.id, periods.daily, quest.period, periodKey, quest.id, replacement.id]
+      );
+
+      if (saved.rows.length === 0) {
+        return res.status(409).json({ success: false, error: "You already used today's reroll." });
+      }
+
+      res.json({ success: true, replacedId: quest.id, newId: replacement.id });
     } catch (error) {
       next(error);
     }
@@ -350,12 +541,6 @@ export function createQuestsRouter({ requireAuth }) {
 
   // POST /api/quests/:questId/claim – mintează recompensa PAW
   router.post("/:questId/claim", async (req, res) => {
-    const quest = QUESTS.find((q) => q.id === req.params.questId);
-
-    if (!quest) {
-      return res.status(404).json({ success: false, error: "Quest-ul nu există." });
-    }
-
     let claimId = null;
 
     try {
@@ -366,6 +551,13 @@ export function createQuestsRouter({ requireAuth }) {
           success: false,
           error: "Wallet-ul utilizatorului nu există. Reconectează-te.",
         });
+      }
+
+      const { active } = await getActiveQuests(user.id, await getPeriodKeys());
+      const quest = active.find((item) => item.id === req.params.questId);
+
+      if (!quest) {
+        return res.status(404).json({ success: false, error: "You don't have this quest right now." });
       }
 
       const progress = await getQuestProgress(quest, user.id);

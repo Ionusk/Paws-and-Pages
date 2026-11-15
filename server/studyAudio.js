@@ -304,6 +304,17 @@ export function createStudyAudioRouter({ requireAuth }) {
 
       const { audio, mime_type: mimeType } = result.rows[0];
 
+      // Count a listen when playback starts from the beginning (used by the
+      // "Listen to an audio lesson" quest). Seeking ahead doesn't count again.
+      if (!/^bytes=[1-9]/.test(req.headers.range || "")) {
+        pool
+          .query(
+            "UPDATE study_audio SET last_listened_at = NOW() WHERE material_id = $1 AND user_id = $2",
+            [materialId, userId]
+          )
+          .catch((error) => console.error("Listen tracking failed:", error.message));
+      }
+
       res.setHeader("Content-Type", mimeType);
       res.setHeader("Accept-Ranges", "bytes");
       res.setHeader("Cache-Control", "private, max-age=3600");

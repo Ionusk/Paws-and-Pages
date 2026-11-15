@@ -1,20 +1,30 @@
 import { router, useFocusEffect, type Href } from "expo-router";
-import { useCallback, useState } from "react";
 import {
     ArrowLeft,
     ArrowRight,
+    Award,
     BookOpen,
+    BookPlus,
     CalendarCheck,
     Check,
     Clock3,
     Coins,
+    FileText,
     GraduationCap,
-    LibraryBig,
-    Lock,
+    Handshake,
+    Headphones,
+    Layers,
+    MessageCircleQuestionMark,
+    Mic,
     PenLine,
+    Shuffle,
     Sparkles,
+    Star,
+    Target,
+    Timer,
     Trophy,
 } from "lucide-react-native";
+import { useCallback, useState } from "react";
 import {
     ActivityIndicator,
     Pressable,
@@ -27,12 +37,11 @@ import {
     View,
 } from "react-native";
 
-import { Notice } from "@/components/ui/feedback";
+import { Notice, StateCard } from "@/components/ui/feedback";
 import { COMPACT_BREAKPOINT } from "@/constants/palette";
-import { useProgressStats } from "@/hooks/useProgressStats";
 import { getErrorMessage, useApi } from "@/lib/api";
+import { confirmAction } from "@/lib/feedback";
 import { goBack } from "@/lib/navigation";
-import type { ReadingBook, ReadingSessionRecord } from "@/lib/readingApi";
 import { usePawWallet } from "../hooks/usePawWallet";
 
 const COLORS = {
@@ -50,228 +59,95 @@ const COLORS = {
   border: "#E7D9EE",
 };
 
-type QuestData = {
-  books: ReadingBook[];
-  sessions: ReadingSessionRecord[];
-};
-
 type ClaimStatus = "pending" | "submitted" | "confirmed" | null;
 
-/** Progress and reward state computed by the server from TigerData. */
+/** A quest the server picked for this user (GET /api/quests). */
 type ServerQuest = {
   id: string;
+  period: "daily" | "weekly";
   reward: number;
   target: number;
   progress: number;
   claimStatus: ClaimStatus;
 };
 
-type Quest = {
-  id: string;
+/** How each quest of the server's pool looks. Keys match server/quests.js. */
+type QuestLook = {
   title: string;
   description: string;
-  reward: number;
-  target: number;
   unit: string;
   category: string;
   icon: typeof BookOpen;
   color: string;
   iconColor: string;
-  /**
-   * Client-side estimate, used only until the server answers. The server
-   * (GET /api/quests) is the source of truth and decides the PAW rewards.
-   */
-  measure: ((data: QuestData) => number) | null;
-  unavailableReason?: string;
   action?: { label: string; route: Href };
 };
 
-function isToday(iso: string | undefined) {
-  if (!iso) return false;
-  const date = new Date(iso);
-  const now = new Date();
+const READ_ACTION = { label: "Start reading", route: "/reading/session" as Href };
+const QUIZ_ACTION = { label: "Practice", route: "/study/practice" as Href };
+const UPLOAD_ACTION = { label: "Upload", route: "/study/upload" as Href };
 
-  return (
-    date.getFullYear() === now.getFullYear() &&
-    date.getMonth() === now.getMonth() &&
-    date.getDate() === now.getDate()
-  );
-}
+const LOOKS: Record<string, QuestLook> = {
+  read10: { title: "A quick chapter", description: "Read for 10 minutes today.", unit: "min", category: "READING", icon: Timer, color: COLORS.lightPink, iconColor: COLORS.darkPink, action: READ_ACTION },
+  read: { title: "A little reading", description: "Read for 20 minutes today.", unit: "min", category: "READING", icon: BookOpen, color: COLORS.lightPink, iconColor: COLORS.darkPink, action: READ_ACTION },
+  read30: { title: "Lost in a story", description: "Read for 30 minutes today.", unit: "min", category: "READING", icon: BookOpen, color: COLORS.peach, iconColor: "#A77C6C", action: READ_ACTION },
+  pages20: { title: "Page turner", description: "Read 20 pages today in your reading sessions.", unit: "pages", category: "READING", icon: Layers, color: COLORS.lavender, iconColor: COLORS.purple, action: READ_ACTION },
+  book: { title: "New beginnings", description: "Add a new book to your collection today.", unit: "book", category: "COLLECTION", icon: BookPlus, color: COLORS.lavender, iconColor: COLORS.purple, action: { label: "Add a book", route: "/reading/add-book" } },
+  review: { title: "Share your thoughts", description: "Write your impressions after a reading session today.", unit: "session", category: "REFLECTION", icon: PenLine, color: COLORS.peach, iconColor: "#A77C6C", action: READ_ACTION },
+  quiz1: { title: "Quick check", description: "Complete a practice quiz today.", unit: "quiz", category: "LEARNING", icon: GraduationCap, color: COLORS.sage, iconColor: "#71866F", action: QUIZ_ACTION },
+  perfect: { title: "Perfect score", description: "Answer every question right in a quiz today.", unit: "quiz", category: "LEARNING", icon: Star, color: COLORS.peach, iconColor: "#A77C6C", action: QUIZ_ACTION },
+  listen: { title: "Learn by ear", description: "Listen to one of your audio lessons today.", unit: "lesson", category: "LISTENING", icon: Headphones, color: COLORS.lavender, iconColor: COLORS.purple, action: { label: "Listen", route: "/study/audio" } },
+  tutor: { title: "Ask away", description: "Ask the study tutor about one of your lessons.", unit: "chat", category: "LEARNING", icon: MessageCircleQuestionMark, color: COLORS.lightPink, iconColor: COLORS.darkPink, action: { label: "Ask", route: "/study/tutor" } },
+  upload1: { title: "Fresh material", description: "Upload a study material today.", unit: "file", category: "STUDY", icon: FileText, color: COLORS.sage, iconColor: "#71866F", action: UPLOAD_ACTION },
+  consistency: { title: "Consistency is key", description: "Read on 5 different days this week.", unit: "days", category: "CONSISTENCY", icon: CalendarCheck, color: COLORS.sage, iconColor: "#71866F", action: READ_ACTION },
+  pages150: { title: "Bookworm week", description: "Read 150 pages this week.", unit: "pages", category: "READING", icon: Layers, color: COLORS.lightPink, iconColor: COLORS.darkPink, action: READ_ACTION },
+  finish: { title: "The final chapter", description: "Finish reading a book this week.", unit: "book", category: "ACHIEVEMENT", icon: Trophy, color: COLORS.peach, iconColor: "#A77C6C", action: { label: "My books", route: "/reading" } },
+  study: { title: "Curious minds", description: "Complete 3 practice quizzes this week.", unit: "quizzes", category: "LEARNING", icon: GraduationCap, color: COLORS.lavender, iconColor: COLORS.purple, action: QUIZ_ACTION },
+  quiz80: { title: "Top of the class", description: "Score 80% or more on a quiz this week.", unit: "quiz", category: "LEARNING", icon: Target, color: COLORS.sage, iconColor: "#71866F", action: QUIZ_ACTION },
+  upload2: { title: "Well prepared", description: "Upload 2 study materials this week.", unit: "files", category: "STUDY", icon: FileText, color: COLORS.lavender, iconColor: COLORS.purple, action: UPLOAD_ACTION },
+  voice3: { title: "Let's talk", description: "Have 3 voice chats with Laica or the tutor this week.", unit: "chats", category: "VOICE", icon: Mic, color: COLORS.lightPink, iconColor: COLORS.darkPink, action: { label: "Talk", route: "/study/voice" } },
+  campusPublish: { title: "Share a book", description: "Publish a book on Campus this week.", unit: "book", category: "CAMPUS", icon: Award, color: COLORS.peach, iconColor: "#A77C6C", action: { label: "Campus", route: "/campus" } },
+  campusBorrow: { title: "Book swap", description: "Borrow a book from another student on Campus.", unit: "book", category: "CAMPUS", icon: Handshake, color: COLORS.sage, iconColor: "#71866F", action: { label: "Campus", route: "/campus" } },
+};
 
-/** Monday 00:00 of the current week, in local time. */
-function startOfWeek() {
-  const now = new Date();
-  const day = (now.getDay() + 6) % 7; // 0 = Monday
-  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  start.setDate(start.getDate() - day);
-  return start;
-}
-
-const dailyQuests: Quest[] = [
-  {
-    id: "read",
-    title: "A little reading",
-    description: "Read for 20 minutes today.",
-    reward: 15,
-    target: 20,
-    unit: "min",
-    category: "READING",
-    icon: BookOpen,
-    color: COLORS.lightPink,
-    iconColor: COLORS.darkPink,
-    measure: ({ sessions }) =>
-      Math.floor(
-        sessions
-          .filter((session) => isToday(session.date))
-          .reduce((total, session) => total + session.durationSeconds, 0) / 60,
-      ),
-    action: { label: "Start a reading session", route: "/reading/session" },
-  },
-  {
-    id: "book",
-    title: "New beginnings",
-    description: "Add a new book to your collection today.",
-    reward: 10,
-    target: 1,
-    unit: "book",
-    category: "COLLECTION",
-    icon: LibraryBig,
-    color: COLORS.lavender,
-    iconColor: COLORS.purple,
-    measure: ({ books }) => books.filter((book) => isToday(book.createdAt)).length,
-    action: { label: "Add a book", route: "/reading/add-book" },
-  },
-  {
-    id: "review",
-    title: "Share your thoughts",
-    description: "Write your impressions after a reading session today.",
-    reward: 20,
-    target: 1,
-    unit: "session",
-    category: "COMMUNITY",
-    icon: PenLine,
-    color: COLORS.peach,
-    iconColor: "#A77C6C",
-    measure: ({ sessions }) =>
-      sessions.filter(
-        (session) => isToday(session.date) && session.impressions?.trim(),
-      ).length,
-    action: { label: "Start a reading session", route: "/reading/session" },
-  },
-];
-
-const weeklyQuests: Quest[] = [
-  {
-    id: "consistency",
-    title: "Consistency is key",
-    description: "Read on 5 different days this week.",
-    reward: 60,
-    target: 5,
-    unit: "days",
-    category: "CONSISTENCY",
-    icon: CalendarCheck,
-    color: COLORS.sage,
-    iconColor: "#71866F",
-    measure: ({ sessions }) => {
-      const weekStart = startOfWeek().getTime();
-      const days = new Set(
-        sessions
-          .filter((session) => new Date(session.date).getTime() >= weekStart)
-          .map((session) => new Date(session.date).toDateString()),
-      );
-      return days.size;
-    },
-    action: { label: "Start a reading session", route: "/reading/session" },
-  },
-  {
-    id: "finish",
-    title: "The final chapter",
-    description: "Finish reading a book this week.",
-    reward: 100,
-    target: 1,
-    unit: "book",
-    category: "ACHIEVEMENT",
-    icon: Trophy,
-    color: COLORS.peach,
-    iconColor: "#A77C6C",
-    measure: ({ books }) => {
-      const weekStart = startOfWeek().getTime();
-      return books.filter(
-        (book) =>
-          book.status === "finished" &&
-          book.finishedAt &&
-          new Date(book.finishedAt).getTime() >= weekStart,
-      ).length;
-    },
-    action: { label: "Go to my books", route: "/reading" },
-  },
-  {
-    id: "study",
-    title: "Curious minds",
-    description: "Complete 3 practice quizzes this week.",
-    reward: 45,
-    target: 3,
-    unit: "quizzes",
-    category: "LEARNING",
-    icon: GraduationCap,
-    color: COLORS.lavender,
-    iconColor: COLORS.purple,
-    // Quiz results live only on the server, so progress comes from there.
-    measure: null,
-    action: { label: "Practice", route: "/study/practice" },
-  },
-];
+const FALLBACK_LOOK: QuestLook = {
+  title: "Special quest",
+  description: "A new challenge from Laica.",
+  unit: "",
+  category: "QUEST",
+  icon: Sparkles,
+  color: COLORS.lavender,
+  iconColor: COLORS.purple,
+};
 
 function QuestCard({
   quest,
-  data,
-  loading,
-  server,
   claiming,
-  claimDisabled,
+  busy,
+  canReroll,
   onClaim,
+  onReroll,
 }: {
-  quest: Quest;
-  data: QuestData | null;
-  loading: boolean;
-  server: ServerQuest | undefined;
+  quest: ServerQuest;
   claiming: boolean;
-  claimDisabled: boolean;
+  busy: boolean;
+  canReroll: boolean;
   onClaim: () => void;
+  onReroll: () => void;
 }) {
-  const Icon = quest.icon;
-  const unavailable = Boolean(quest.unavailableReason);
-  // Server progress wins; the local estimate only fills the gap while loading.
-  const value = unavailable
-    ? null
-    : server
-      ? server.progress
-      : data && quest.measure
-        ? quest.measure(data)
-        : null;
-  const claimStatus = server?.claimStatus ?? null;
-  const claimed = claimStatus === "confirmed";
-  const confirming = claimStatus === "pending" || claimStatus === "submitted";
-  const progress = value !== null ? Math.min(value / quest.target, 1) : 0;
-  const completed = value !== null && value >= quest.target;
-
-  const status = unavailable
-    ? "Not available yet"
-    : value === null
-      ? loading
-        ? "Checking..."
-        : "Progress unavailable"
-      : completed
-        ? "Completed"
-        : value > 0
-          ? "In progress"
-          : "Not started";
+  const look = LOOKS[quest.id] ?? FALLBACK_LOOK;
+  const Icon = look.icon;
+  const value = Math.min(quest.progress, quest.target);
+  const completed = quest.progress >= quest.target;
+  const claimed = quest.claimStatus === "confirmed";
+  const confirming =
+    quest.claimStatus === "pending" || quest.claimStatus === "submitted";
 
   return (
-    <View style={[styles.questCard, unavailable && styles.questCardUnavailable]}>
+    <View style={styles.questCard}>
       <View style={styles.questTop}>
-        <View style={[styles.questIcon, { backgroundColor: quest.color }]}>
-          <Icon size={23} color={quest.iconColor} strokeWidth={1.7} />
+        <View style={[styles.questIcon, { backgroundColor: look.color }]}>
+          <Icon size={23} color={look.iconColor} strokeWidth={1.7} />
         </View>
 
         <View style={styles.questReward}>
@@ -281,79 +157,53 @@ function QuestCard({
       </View>
 
       <View style={styles.questInfo}>
-        <Text style={styles.questCategory}>{quest.category}</Text>
-        <Text style={styles.questTitle}>{quest.title}</Text>
-        <Text style={styles.questDescription}>{quest.description}</Text>
+        <Text style={styles.questCategory}>{look.category}</Text>
+        <Text style={styles.questTitle}>{look.title}</Text>
+        <Text style={styles.questDescription}>{look.description}</Text>
       </View>
 
-      {unavailable ? (
-        <View style={styles.unavailableBox}>
-          <Lock size={14} color={COLORS.muted} />
-          <Text style={styles.unavailableText}>{quest.unavailableReason}</Text>
-        </View>
-      ) : (
-        <View style={styles.progressSection}>
-          <View style={styles.progressLabels}>
-            <Text style={styles.progressLabel}>YOUR PROGRESS</Text>
-            <Text style={styles.progressValue}>
-              {value === null ? "—" : Math.min(value, quest.target)}/
-              {quest.target} {quest.unit}
-            </Text>
-          </View>
-
-          <View
-            style={styles.progressTrack}
-            accessible
-            accessibilityRole="progressbar"
-            accessibilityValue={{
-              min: 0,
-              max: quest.target,
-              now: value === null ? 0 : Math.min(value, quest.target),
-            }}
-          >
-            <View
-              style={[
-                styles.progressFill,
-                {
-                  width: `${progress * 100}%`,
-                  backgroundColor: completed ? "#8BA486" : COLORS.darkPink,
-                },
-              ]}
-            />
-          </View>
-        </View>
-      )}
-
-      <View style={styles.questFooter}>
-        <View style={styles.questStatus}>
-          {completed ? (
-            <Check size={14} color="#71866F" />
-          ) : unavailable ? (
-            <Lock size={14} color={COLORS.muted} />
-          ) : (
-            <Clock3 size={14} color={COLORS.muted} />
-          )}
-          <Text style={[styles.statusText, completed && { color: "#71866F" }]}>
-            {status}
+      <View style={styles.progressSection}>
+        <View style={styles.progressLabels}>
+          <Text style={styles.progressLabel}>YOUR PROGRESS</Text>
+          <Text style={styles.progressValue}>
+            {value}/{quest.target} {look.unit}
           </Text>
         </View>
+        <View
+          style={styles.progressTrack}
+          accessible
+          accessibilityRole="progressbar"
+          accessibilityValue={{ min: 0, max: quest.target, now: value }}
+        >
+          <View
+            style={[
+              styles.progressFill,
+              {
+                width: `${(value / quest.target) * 100}%`,
+                backgroundColor: completed ? "#8BA486" : COLORS.darkPink,
+              },
+            ]}
+          />
+        </View>
+      </View>
 
+      <View style={styles.questFooter}>
         {claimed ? (
           <View style={styles.claimedPill}>
             <Check size={13} color="#71866F" />
             <Text style={styles.claimedText}>+{quest.reward} PAW received</Text>
           </View>
-        ) : completed && server ? (
+        ) : completed ? (
           <Pressable
             onPress={onClaim}
-            disabled={claimDisabled}
+            disabled={busy}
             style={({ pressed }) => [
               styles.claimButton,
-              (pressed || claiming || claimDisabled) && styles.pressed,
+              (pressed || claiming || busy) && styles.pressed,
             ]}
             accessibilityRole="button"
-            accessibilityLabel={`Claim ${quest.reward} PAW for ${quest.title}`}
-            accessibilityState={{ disabled: claimDisabled, busy: claiming }}
+            accessibilityLabel={`Claim ${quest.reward} PAW for ${look.title}`}
+            accessibilityState={{ disabled: busy, busy: claiming }}
           >
             {claiming ? (
               <ActivityIndicator size="small" color={COLORS.white} />
@@ -361,21 +211,36 @@ function QuestCard({
               <Coins size={14} color={COLORS.white} />
             )}
             <Text style={styles.claimButtonText}>
-              {claiming
-                ? "Sending..."
-                : confirming
-                  ? "Check reward"
-                  : `Claim ${quest.reward} PAW`}
+              {claiming ? "Sending..." : confirming ? "Check reward" : `Claim ${quest.reward} PAW`}
             </Text>
           </Pressable>
-        ) : !completed && !unavailable && quest.action ? (
+        ) : look.action ? (
           <Pressable
-            onPress={() => router.push(quest.action!.route)}
+            onPress={() => router.push(look.action!.route)}
             style={({ pressed }) => [styles.questAction, pressed && styles.pressed]}
             accessibilityRole="button"
           >
-            <Text style={styles.questActionText}>{quest.action.label}</Text>
+            <Text style={styles.questActionText}>{look.action.label}</Text>
             <ArrowRight size={14} color={COLORS.text} />
+          </Pressable>
+        ) : (
+          <View style={styles.questStatus}>
+            <Clock3 size={14} color={COLORS.muted} />
+            <Text style={styles.statusText}>In progress</Text>
+          </View>
+        )}
+
+        {canReroll && !claimed && !confirming ? (
+          <Pressable
+            onPress={onReroll}
+            disabled={busy}
+            hitSlop={8}
+            style={({ pressed }) => [styles.rerollButton, (pressed || busy) && styles.pressed]}
+            accessibilityRole="button"
+            accessibilityLabel={`Swap ${look.title} for another quest`}
+          >
+            <Shuffle size={14} color={COLORS.purple} />
+            <Text style={styles.rerollText}>Swap</Text>
           </Pressable>
         ) : null}
       </View>
@@ -386,118 +251,126 @@ function QuestCard({
 export default function QuestsScreen() {
   const { width } = useWindowDimensions();
   const isCompact = width < COMPACT_BREAKPOINT;
-
-  const {
-    balance,
-    loading: walletLoading,
-    refreshWallet,
-  } = usePawWallet();
+  const { balance, loading: walletLoading, refreshWallet } = usePawWallet();
   const displayedBalance = walletLoading ? "..." : (balance ?? "—");
 
-  const { stats, loading: statsLoading, error: statsError, refresh } =
-    useProgressStats();
-
-  // ------------------------------------------------
-  // SERVER PROGRESS + PAW REWARDS (server/quests.js)
-  // ------------------------------------------------
-
   const { fetchRaw, request } = useApi();
-  const [serverQuests, setServerQuests] = useState<ServerQuest[]>([]);
-  const [claimingId, setClaimingId] = useState<string | null>(null);
-  const [claimNotice, setClaimNotice] = useState<{
+  const [quests, setQuests] = useState<ServerQuest[]>([]);
+  const [rerollAvailable, setRerollAvailable] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [notice, setNotice] = useState<{
     tone: "success" | "error" | "info";
     message: string;
   } | null>(null);
 
-  const loadServerQuests = useCallback(async () => {
+  const loadQuests = useCallback(async () => {
     try {
-      const data = await request<{ quests: ServerQuest[] }>("/api/quests");
-      setServerQuests(data.quests ?? []);
+      setLoadError("");
+      const data = await request<{ quests: ServerQuest[]; rerollAvailable?: boolean }>(
+        "/api/quests",
+      );
+      setQuests(data.quests ?? []);
+      setRerollAvailable(Boolean(data.rerollAvailable));
     } catch (error) {
       console.error("Quests loading error:", error);
-      setClaimNotice({
-        tone: "error",
-        message: getErrorMessage(error, "We couldn't load your quest rewards."),
-      });
+      setLoadError(getErrorMessage(error, "We couldn't load your quests."));
+    } finally {
+      setLoading(false);
     }
   }, [request]);
 
   // Reload whenever the screen is shown, so new activity counts right away.
   useFocusEffect(
     useCallback(() => {
-      loadServerQuests();
-    }, [loadServerQuests]),
+      loadQuests();
+    }, [loadQuests]),
   );
 
-  const handleClaim = async (quest: Quest) => {
-    if (claimingId) return;
+  const handleClaim = async (quest: ServerQuest) => {
+    if (busyId) return;
 
     try {
-      setClaimingId(quest.id);
-      setClaimNotice({
-        tone: "info",
-        message: `Sending ${quest.reward} PAW to your wallet on Solana...`,
-      });
+      setBusyId(quest.id);
+      setNotice({ tone: "info", message: `Sending ${quest.reward} PAW to your wallet on Solana...` });
 
       const { ok, status, data } = await fetchRaw<{
         success?: boolean;
         error?: string;
         pendingConfirmation?: boolean;
-      }>(`/api/quests/${encodeURIComponent(quest.id)}/claim`, {
-        method: "POST",
-      });
+      }>(`/api/quests/${encodeURIComponent(quest.id)}/claim`, { method: "POST" });
 
       if (status === 202 || data.pendingConfirmation) {
-        setClaimNotice({
-          tone: "info",
-          message: data.error || "Your reward is still being confirmed.",
-        });
+        setNotice({ tone: "info", message: data.error || "Your reward is still being confirmed." });
       } else if (!ok || !data.success) {
         throw new Error(data.error || "We couldn't send your reward.");
       } else {
-        setClaimNotice({
-          tone: "success",
-          message: `+${quest.reward} PAW are now in your wallet!`,
-        });
+        setNotice({ tone: "success", message: `+${quest.reward} PAW are now in your wallet!` });
       }
 
-      await Promise.all([loadServerQuests(), refreshWallet()]);
+      await Promise.all([loadQuests(), refreshWallet()]);
     } catch (error) {
       console.error("Quest claim error:", error);
-      setClaimNotice({
-        tone: "error",
-        message: getErrorMessage(error, "We couldn't send your reward."),
-      });
+      setNotice({ tone: "error", message: getErrorMessage(error, "We couldn't send your reward.") });
     } finally {
-      setClaimingId(null);
+      setBusyId(null);
     }
   };
 
-  const renderQuest = (quest: Quest) => (
-    <QuestCard
-      key={quest.id}
-      quest={quest}
-      data={questData}
-      loading={statsLoading}
-      server={serverQuests.find((q) => q.id === quest.id)}
-      claiming={claimingId === quest.id}
-      claimDisabled={claimingId !== null}
-      onClaim={() => handleClaim(quest)}
-    />
-  );
-  const questData: QuestData | null = stats
-    ? { books: stats.books, sessions: stats.sessions }
-    : null;
+  const handleReroll = async (quest: ServerQuest) => {
+    if (busyId) return;
 
-  const totalDailyRewards = dailyQuests.reduce(
-    (total, quest) => total + quest.reward,
-    0,
-  );
+    const title = (LOOKS[quest.id] ?? FALLBACK_LOOK).title;
+    const ok = await confirmAction({
+      title: `Swap "${title}"?`,
+      message: "You get a different quest instead. You can swap one quest per day.",
+      confirmText: "Swap quest",
+    });
+    if (!ok) return;
 
-  const totalWeeklyRewards = weeklyQuests.reduce(
-    (total, quest) => total + quest.reward,
-    0,
-  );
+    try {
+      setBusyId(quest.id);
+      const data = await request<{ newId: string }>(
+        `/api/quests/${encodeURIComponent(quest.id)}/reroll`,
+        { method: "POST" },
+      );
+      const next = LOOKS[data.newId] ?? FALLBACK_LOOK;
+      setNotice({ tone: "success", message: `New quest: ${next.title}.` });
+      await loadQuests();
+    } catch (error) {
+      console.error("Quest reroll error:", error);
+      setNotice({ tone: "error", message: getErrorMessage(error, "We couldn't swap this quest.") });
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const daily = quests.filter((quest) => quest.period === "daily");
+  const weekly = quests.filter((quest) => quest.period === "weekly");
+  const total = (list: ServerQuest[]) => list.reduce((sum, quest) => sum + quest.reward, 0);
+
+  const renderList = (list: ServerQuest[]) => {
+    if (loading && quests.length === 0) {
+      return <StateCard loading loadingText="Picking your quests..." />;
+    }
+
+    return (
+      <View style={styles.questList}>
+        {list.map((quest) => (
+          <QuestCard
+            key={quest.id}
+            quest={quest}
+            claiming={busyId === quest.id}
+            busy={busyId !== null}
+            canReroll={rerollAvailable}
+            onClaim={() => handleClaim(quest)}
+            onReroll={() => handleReroll(quest)}
+          />
+        ))}
+      </View>
+    );
+  };
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -505,20 +378,14 @@ export default function QuestsScreen() {
 
       <ScrollView
         style={styles.container}
-        contentContainerStyle={[
-          styles.content,
-          isCompact && styles.contentCompact,
-        ]}
+        contentContainerStyle={[styles.content, isCompact && styles.contentCompact]}
         showsVerticalScrollIndicator={false}
       >
         {/* HEADER */}
         <View style={styles.header}>
           <Pressable
             onPress={() => goBack("/home")}
-            style={({ pressed }) => [
-              styles.backButton,
-              pressed && styles.pressed,
-            ]}
+            style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}
             accessibilityRole="button"
             accessibilityLabel="Go back"
           >
@@ -527,9 +394,7 @@ export default function QuestsScreen() {
 
           <View style={styles.headerTitleContainer}>
             <Text style={styles.headerTitle}>Your Quests</Text>
-            <Text style={styles.headerSubtitle}>
-              LITTLE STEPS, LOVELY REWARDS
-            </Text>
+            <Text style={styles.headerSubtitle}>LITTLE STEPS, LOVELY REWARDS</Text>
           </View>
 
           <View style={styles.tokenBalance}>
@@ -541,13 +406,15 @@ export default function QuestsScreen() {
         {/* HERO */}
         <View style={[styles.heroCard, isCompact && styles.heroCardCompact]}>
           <View style={styles.heroText}>
-            <Text style={styles.heroEyebrow}>A LITTLE CHALLENGE</Text>
+            <Text style={styles.heroEyebrow}>NEW QUESTS EVERY DAY</Text>
             <Text style={styles.heroTitle}>
               Every chapter{"\n"}is an adventure.
             </Text>
             <Text style={styles.heroDescription}>
-              Complete quests and build good reading habits. Progress updates
-              from your real reading sessions and books.
+              Daily quests change every day and weekly challenges every
+              Monday. {rerollAvailable
+                ? "Don't like one? You can swap one quest today."
+                : "You've used today's swap."}
             </Text>
           </View>
 
@@ -559,6 +426,25 @@ export default function QuestsScreen() {
           </View>
         </View>
 
+        {notice ? (
+          <Notice
+            tone={notice.tone}
+            message={notice.message}
+            onDismiss={() => setNotice(null)}
+            style={styles.statsNotice}
+          />
+        ) : null}
+
+        {loadError ? (
+          <Notice
+            tone="error"
+            message={loadError}
+            actionLabel="Try again"
+            onAction={loadQuests}
+            style={styles.statsNotice}
+          />
+        ) : null}
+
         {/* DAILY SECTION */}
         <View style={styles.sectionHeader}>
           <View style={styles.sectionIcon}>
@@ -566,61 +452,32 @@ export default function QuestsScreen() {
           </View>
           <View style={styles.sectionHeading}>
             <Text style={styles.sectionTitle}>Daily quests</Text>
-            <Text style={styles.sectionSubtitle}>
-              Small goals for a lovely day.
-            </Text>
+            <Text style={styles.sectionSubtitle}>New ones tomorrow.</Text>
           </View>
           <View style={styles.rewardSummary}>
-            <Text style={styles.summaryNumber}>{totalDailyRewards}</Text>
+            <Text style={styles.summaryNumber}>{total(daily)}</Text>
             <Text style={styles.summaryLabel}>PAW in rewards</Text>
           </View>
         </View>
 
-        {claimNotice ? (
-          <Notice
-            tone={claimNotice.tone}
-            message={claimNotice.message}
-            onDismiss={() => setClaimNotice(null)}
-            style={styles.statsNotice}
-          />
-        ) : null}
-
-        {statsError ? (
-          <Notice
-            tone="error"
-            message={`We couldn't load your quest progress. ${statsError}`}
-            actionLabel="Try again"
-            onAction={refresh}
-            style={styles.statsNotice}
-          />
-        ) : null}
-
-        <View style={styles.questList}>
-          {dailyQuests.map(renderQuest)}
-        </View>
+        {renderList(daily)}
 
         {/* WEEKLY SECTION */}
         <View style={styles.sectionHeader}>
-          <View
-            style={[styles.sectionIcon, { backgroundColor: COLORS.lavender }]}
-          >
+          <View style={[styles.sectionIcon, { backgroundColor: COLORS.lavender }]}>
             <CalendarCheck size={19} color={COLORS.purple} />
           </View>
           <View style={styles.sectionHeading}>
             <Text style={styles.sectionTitle}>Weekly challenges</Text>
-            <Text style={styles.sectionSubtitle}>
-              Bigger goals, bigger rewards.
-            </Text>
+            <Text style={styles.sectionSubtitle}>New ones every Monday.</Text>
           </View>
           <View style={styles.rewardSummary}>
-            <Text style={styles.summaryNumber}>{totalWeeklyRewards}</Text>
+            <Text style={styles.summaryNumber}>{total(weekly)}</Text>
             <Text style={styles.summaryLabel}>PAW in rewards</Text>
           </View>
         </View>
 
-        <View style={styles.questList}>
-          {weeklyQuests.map(renderQuest)}
-        </View>
+        {renderList(weekly)}
 
         {/* BOTTOM NOTE */}
         <View style={styles.infoCard}>
@@ -630,7 +487,8 @@ export default function QuestsScreen() {
           <View style={styles.infoTextContainer}>
             <Text style={styles.infoTitle}>Your effort deserves a reward.</Text>
             <Text style={styles.infoDescription}>
-              Finish a quest and tap Claim: the PAW are minted to your wallet on Solana Devnet and you can spend them in Laica's Shop.
+              Finish a quest and tap Claim: the PAW are minted to your wallet
+              on Solana Devnet and you can spend them in Laica&apos;s Shop.
             </Text>
           </View>
         </View>
@@ -1062,6 +920,21 @@ const styles = StyleSheet.create({
     fontFamily: "Nunito_800ExtraBold",
     letterSpacing: 2,
     color: COLORS.muted,
+  },
+  rerollButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    marginLeft: "auto",
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    backgroundColor: COLORS.lavender,
+  },
+  rerollText: {
+    color: COLORS.purple,
+    fontSize: 11,
+    fontFamily: "Nunito_800ExtraBold",
   },
   pressed: {
     opacity: 0.82,
