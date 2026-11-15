@@ -341,6 +341,9 @@ function parseWholeNumber(value) {
   return Number.isInteger(number) ? number : NaN;
 }
 
+// Rezultatele recente, ca aceeași căutare să nu mai depindă de Open Library.
+const openLibraryCache = new Map();
+
 // GET – caută cărți în Open Library (titlu, autor, pagini, copertă)
 app.get(
   "/api/books/search",
@@ -352,6 +355,13 @@ app.get(
       return res.json({ success: true, results: [] });
     }
 
+    const cacheKey = query.toLowerCase();
+    const cached = openLibraryCache.get(cacheKey);
+
+    if (cached && cached.expires > Date.now()) {
+      return res.json({ success: true, results: cached.results });
+    }
+
     try {
       const url = new URL("https://openlibrary.org/search.json");
       url.searchParams.set("q", query);
@@ -361,18 +371,42 @@ app.get(
       );
       url.searchParams.set("limit", "12");
 
-      const response = await fetch(url, {
-        headers: {
-          "User-Agent": "PawsAndPages/1.0 (student reading app)",
-        },
-        signal: AbortSignal.timeout(10000),
-      });
+      // Open Library has frequent short hiccups (timeouts, 5xx), so try a
+      // few times before giving up.
+      let data = null;
+      let lastError = null;
 
-      if (!response.ok) {
-        throw new Error(`Open Library a răspuns cu ${response.status}`);
+      for (let attempt = 1; attempt <= 3 && !data; attempt++) {
+        try {
+          const response = await fetch(url, {
+            headers: {
+              "User-Agent": "PawsAndPages/1.0 (student reading app)",
+            },
+            signal: AbortSignal.timeout(12000),
+          });
+
+          if (!response.ok) {
+            throw new Error(`Open Library a răspuns cu ${response.status}`);
+          }
+
+          data = await response.json();
+        } catch (error) {
+          lastError = error;
+          console.warn(
+            `Open Library search attempt ${attempt} failed:`,
+            error.name,
+            error.message
+          );
+
+          if (attempt < 3) {
+            await new Promise((resolve) => setTimeout(resolve, 600 * attempt));
+          }
+        }
       }
 
-      const data = await response.json();
+      if (!data) {
+        throw lastError;
+      }
 
       const results = (data.docs || [])
         .filter((doc) => doc.title && doc.key)
@@ -388,6 +422,15 @@ app.get(
             ? `https://covers.openlibrary.org/b/id/${doc.cover_i}-M.jpg`
             : null,
         }));
+
+      openLibraryCache.set(cacheKey, {
+        results,
+        expires: Date.now() + 10 * 60 * 1000,
+      });
+
+      if (openLibraryCache.size > 200) {
+        openLibraryCache.delete(openLibraryCache.keys().next().value);
+      }
 
       res.json({ success: true, results });
     } catch (error) {
