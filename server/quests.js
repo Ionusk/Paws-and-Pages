@@ -151,10 +151,17 @@ function rank(seed) {
   return crypto.createHash("sha256").update(seed).digest("hex");
 }
 
-/** Quests this user may get (Campus quests only for verified UPT students). */
+/**
+ * Quests this user may get. Campus quests only when the account itself is
+ * logged in with a @student.upt.ro email that has Campus access; accounts
+ * using another email (e.g. Gmail) never see them.
+ */
 async function eligiblePool(userId) {
   const result = await pool.query(
-    "SELECT student_email_verified_at IS NOT NULL AS campus FROM users WHERE id = $1",
+    `SELECT
+       lower(COALESCE(auth_email, email, '')) LIKE '%@student.upt.ro'
+         AND student_email_verified_at IS NOT NULL AS campus
+     FROM users WHERE id = $1`,
     [userId]
   );
   const campus = Boolean(result.rows[0]?.campus);
@@ -193,7 +200,9 @@ async function getActiveQuests(userId, periods) {
     }
 
     for (const id of ids) {
-      const quest = QUEST_POOL.find((item) => item.id === id);
+      // Only quests this user is allowed (an earlier swap can't bring back a
+      // Campus quest for a non-UPT login).
+      const quest = candidates.find((item) => item.id === id);
       if (quest) active.push(quest);
     }
   }
