@@ -1,38 +1,68 @@
+
 import { router } from "expo-router";
+import { ArrowLeft, LogOut, RefreshCw } from "lucide-react-native";
 import { useEffect, useRef, useState } from "react";
 import {
-  ActivityIndicator,
-  Platform,
-  SafeAreaView,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
+    ActivityIndicator,
+    Platform,
+    SafeAreaView,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View,
+    useWindowDimensions,
 } from "react-native";
 import { useAuth0 } from "react-native-auth0";
+
+import { Notice } from "@/components/ui/feedback";
+import { COMPACT_BREAKPOINT } from "@/constants/palette";
+import { API_AUDIENCE, AUTH_SCOPE, apiRequest, getErrorMessage } from "@/lib/api";
+import {
+    CUSTOM_SCHEME,
+    LOGIN_TIME_KEY,
+    clearLoginTime,
+    markLoginStarted,
+} from "@/lib/authSession";
+import { goBack } from "@/lib/navigation";
 import { AnimatedMascot } from "../components/AnimatedMascot";
 
-const CUSTOM_SCHEME = "pawsandpages";
-
-const API_URL = "http://localhost:3001";
-const API_AUDIENCE = "https://paws-and-pages-api";
-
-const AUTH_SCOPE = "openid profile email offline_access";
-
 const SESSION_DURATION = 4 * 60 * 60 * 1000;
-const LOGIN_TIME_KEY = "paws_pages_login_time";
+
+// Auth0 reports a user closing the login window as a cancellation. That is
+// not an error worth showing in red.
+function isCancellation(error: unknown) {
+  const message = error instanceof Error ? error.message.toLowerCase() : "";
+
+  return (
+    message.includes("cancel") ||
+    message.includes("closed") ||
+    message.includes("dismiss")
+  );
+}
 
 export default function LoginScreen() {
-  const { authorize, user, isLoading, clearSession, getCredentials } =
-    useAuth0();
+  const { width } = useWindowDimensions();
+  const isCompact = width < COMPACT_BREAKPOINT + 120;
+
+  const {
+    authorize,
+    user,
+    isLoading,
+    clearSession,
+    getCredentials,
+  } = useAuth0();
 
   const [loading, setLoading] = useState(false);
+  const [loadingText, setLoadingText] = useState("Getting your paws ready...");
   const [errorMessage, setErrorMessage] = useState("");
+  const [syncFailed, setSyncFailed] = useState(false);
+  const [syncAttempt, setSyncAttempt] = useState(0);
 
   const syncedUserRef = useRef<string | null>(null);
 
   // =========================================================
-  // SINCRONIZARE AUTH0 CU TIGERDATA
+  // SYNC AUTH0 USER WITH TIGERDATA
   // =========================================================
 
   useEffect(() => {
@@ -42,13 +72,8 @@ export default function LoginScreen() {
 
     const auth0Id = user.sub;
 
-    if (!auth0Id) {
-      setErrorMessage("Could not identify your account.");
-      return;
-    }
-
-    // Nu sincronizăm din nou dacă utilizatorul a fost deja salvat.
-    if (syncedUserRef.current === auth0Id) {
+    // Do not sync again if this user was already saved.
+    if (auth0Id && syncedUserRef.current === auth0Id) {
       return;
     }
 
@@ -56,11 +81,15 @@ export default function LoginScreen() {
     let sessionTimer: ReturnType<typeof setTimeout> | undefined;
 
     const syncUserWithDatabase = async () => {
-      let currentStep = "Inițializare";
-
       try {
+        if (!auth0Id) {
+          throw new Error(
+            "We couldn't identify your account. Please log in again."
+          );
+        }
+
         // ---------------------------------------------
-        // VERIFICARE SESIUNE WEB
+        // WEB SESSION LIMIT (4 HOURS)
         // ---------------------------------------------
 
         if (Platform.OS === "web") {
@@ -68,15 +97,13 @@ export default function LoginScreen() {
 
           if (!savedLoginTime) {
             savedLoginTime = Date.now().toString();
-
             localStorage.setItem(LOGIN_TIME_KEY, savedLoginTime);
           }
 
-          const loginTime = Number(savedLoginTime);
-          const elapsed = Date.now() - loginTime;
+          const elapsed = Date.now() - Number(savedLoginTime);
 
           if (elapsed >= SESSION_DURATION) {
-            localStorage.removeItem(LOGIN_TIME_KEY);
+            clearLoginTime();
             syncedUserRef.current = null;
 
             await clearSession();
@@ -84,101 +111,40 @@ export default function LoginScreen() {
             return;
           }
 
-          const remainingTime = SESSION_DURATION - elapsed;
-
           sessionTimer = setTimeout(() => {
-            localStorage.removeItem(LOGIN_TIME_KEY);
+            clearLoginTime();
             syncedUserRef.current = null;
 
             clearSession();
-          }, remainingTime);
+          }, SESSION_DURATION - elapsed);
         }
 
         if (cancelled) return;
 
         setLoading(true);
+        setLoadingText("Setting up your little world...");
         setErrorMessage("");
+        setSyncFailed(false);
 
-        // ---------------------------------------------
-        // PASUL 1: OBȚINERE TOKEN AUTH0
-        // ---------------------------------------------
-
-        currentStep = "Obținere token Auth0";
-
-        console.log("PASUL 1: Solicit token de la Auth0...");
-
+        // 1. Auth0 access token for the API
         const credentials = await getCredentials(AUTH_SCOPE, 0, {
           audience: API_AUDIENCE,
         });
 
         if (!credentials.accessToken) {
-          throw new Error("Auth0 nu a returnat un access token.");
+          throw new Error("Auth0 did not return an access token.");
         }
-
-        console.log("PASUL 2: Token Auth0 primit.");
 
         if (cancelled) return;
 
-        // ---------------------------------------------
-        // PASUL 2: CONECTARE LA BACKEND
-        // ---------------------------------------------
-
-        currentStep = "Conectare la backend";
-
-        console.log(
-          "PASUL 3: Trimit utilizatorul către:",
-          `${API_URL}/api/auth/sync`,
-        );
-
-        const response = await fetch(`${API_URL}/api/auth/sync`, {
+        // 2. Save / update the user and their wallet in the backend
+        await apiRequest("/api/auth/sync", credentials.accessToken, {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${credentials.accessToken}`,
-          },
           body: JSON.stringify({
             email: user.email || null,
             name: user.name || user.nickname || null,
           }),
         });
-
-        console.log("PASUL 4: Backend status:", response.status);
-
-        if (cancelled) return;
-
-        // ---------------------------------------------
-        // PASUL 3: CITIRE RĂSPUNS BACKEND
-        // ---------------------------------------------
-
-        currentStep = "Citire răspuns backend";
-
-        const responseText = await response.text();
-
-        let data: any;
-
-        try {
-          data = responseText ? JSON.parse(responseText) : {};
-        } catch {
-          throw new Error(
-            `Backend-ul a returnat un răspuns invalid: ${responseText.slice(0, 200)}`,
-          );
-        }
-
-        console.log("PASUL 5: Răspuns backend:", data);
-
-        if (!response.ok) {
-          throw new Error(data.error || `Backend error: ${response.status}`);
-        }
-
-        if (!data.success) {
-          throw new Error("TigerData nu a confirmat salvarea utilizatorului.");
-        }
-
-        // ---------------------------------------------
-        // SINCRONIZARE REUȘITĂ
-        // ---------------------------------------------
-
-        console.log("Utilizator sincronizat cu TigerData:", data.user);
 
         syncedUserRef.current = auth0Id;
 
@@ -186,15 +152,17 @@ export default function LoginScreen() {
           router.replace("/home");
         }
       } catch (error) {
-        console.error(`Eroare la pasul: ${currentStep}`, error);
+        console.error("Account sync error:", error);
 
         syncedUserRef.current = null;
 
         if (!cancelled) {
+          setSyncFailed(true);
           setErrorMessage(
-            error instanceof Error
-              ? `${currentStep}: ${error.message}`
-              : "Nu am putut conecta contul la baza de date.",
+            getErrorMessage(
+              error,
+              "We couldn't finish setting up your account."
+            )
           );
         }
       } finally {
@@ -213,25 +181,38 @@ export default function LoginScreen() {
         clearTimeout(sessionTimer);
       }
     };
-  }, [user?.sub, isLoading]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.sub, isLoading, syncAttempt]);
 
   // =========================================================
-  // LOGIN
+  // LOGIN / SIGN UP
   // =========================================================
 
-  const handleLogin = async () => {
+  const startAuth = async (mode: "login" | "signup") => {
+    if (loading) return;
+
     try {
       setLoading(true);
+      setLoadingText(
+        mode === "signup" ? "Opening sign up..." : "Opening login..."
+      );
       setErrorMessage("");
+      setSyncFailed(false);
 
       syncedUserRef.current = null;
 
       const parameters = {
         scope: AUTH_SCOPE,
         audience: API_AUDIENCE,
+        ...(mode === "signup"
+          ? { additionalParameters: { screen_hint: "signup" } }
+          : {}),
       };
 
       if (Platform.OS === "web") {
+        // Auth0 returns to "/" after login; index.tsx uses this flag
+        // to send the user back here to finish setting up the account.
+        markLoginStarted();
         await authorize(parameters);
       } else {
         await authorize(parameters, {
@@ -239,53 +220,45 @@ export default function LoginScreen() {
         });
       }
     } catch (error) {
-      console.error("Login error:", error);
+      console.error(`${mode} error:`, error);
 
-      setErrorMessage(
-        error instanceof Error
-          ? error.message
-          : "Login could not be completed.",
-      );
+      if (!isCancellation(error)) {
+        setErrorMessage(
+          getErrorMessage(
+            error,
+            mode === "signup"
+              ? "Account creation could not be completed."
+              : "Login could not be completed."
+          )
+        );
+      }
 
       setLoading(false);
     }
   };
 
-  // =========================================================
-  // SIGN UP
-  // =========================================================
+  const handleRetrySync = () => {
+    syncedUserRef.current = null;
+    setSyncAttempt((attempt) => attempt + 1);
+  };
 
-  const handleSignup = async () => {
+  const handleLogout = async () => {
     try {
       setLoading(true);
-      setErrorMessage("");
-
+      setLoadingText("Logging you out...");
+      clearLoginTime();
       syncedUserRef.current = null;
 
-      const parameters = {
-        scope: AUTH_SCOPE,
-        audience: API_AUDIENCE,
-        additionalParameters: {
-          screen_hint: "signup",
-        },
-      };
-
-      if (Platform.OS === "web") {
-        await authorize(parameters);
-      } else {
-        await authorize(parameters, {
-          customScheme: CUSTOM_SCHEME,
-        });
-      }
-    } catch (error) {
-      console.error("Signup error:", error);
-
-      setErrorMessage(
-        error instanceof Error
-          ? error.message
-          : "Account creation could not be completed.",
+      await clearSession(
+        {},
+        Platform.OS === "web" ? undefined : { customScheme: CUSTOM_SCHEME }
       );
 
+      router.replace("/");
+    } catch (error) {
+      console.error("Logout error:", error);
+      setErrorMessage("We couldn't log you out. Please try again.");
+    } finally {
       setLoading(false);
     }
   };
@@ -299,7 +272,57 @@ export default function LoginScreen() {
       <SafeAreaView style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#D69BA5" />
 
-        <Text style={styles.loadingText}>Getting your paws ready...</Text>
+        <Text style={styles.loadingText}>{loadingText}</Text>
+      </SafeAreaView>
+    );
+  }
+
+  // =========================================================
+  // SIGNED IN BUT ACCOUNT SETUP FAILED
+  // =========================================================
+
+  if (user && syncFailed) {
+    return (
+      <SafeAreaView style={styles.safe}>
+        <View style={[styles.container, styles.centered]}>
+          <View style={styles.syncCard}>
+            <AnimatedMascot animation="sleepy" size={170} />
+
+            <Text style={styles.syncTitle}>Laica couldn’t open your world</Text>
+
+            <Text style={styles.syncText}>
+              You’re signed in, but we couldn’t finish setting up your account.
+            </Text>
+
+            <Notice
+              tone="error"
+              message={errorMessage}
+              style={styles.syncNotice}
+            />
+
+            <TouchableOpacity
+              style={styles.primaryButton}
+              onPress={handleRetrySync}
+              activeOpacity={0.85}
+              accessibilityRole="button"
+            >
+              <RefreshCw size={17} color="#FFFFFF" />
+              <Text style={styles.primaryButtonText}>Try again</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.secondaryButton}
+              onPress={handleLogout}
+              activeOpacity={0.85}
+              accessibilityRole="button"
+            >
+              <LogOut size={16} color="#806A70" />
+              <Text style={styles.secondaryButtonText}>
+                Log out and use another account
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
       </SafeAreaView>
     );
   }
@@ -310,79 +333,112 @@ export default function LoginScreen() {
 
   return (
     <SafeAreaView style={styles.safe}>
-      <View style={styles.container}>
-        {/* BACK BUTTON */}
-        <TouchableOpacity
-          onPress={() => router.back()}
-          style={styles.backButton}
-          activeOpacity={0.7}
-        >
-          <Text style={styles.backText}>← Back</Text>
-        </TouchableOpacity>
-
-        {/* HEADER */}
-        <View style={styles.header}>
-          <Text style={styles.logo}>PAWS & PAGES</Text>
-
-          <Text style={styles.subtitle}>
-            Your little corner of reading and learning ♡
-          </Text>
-        </View>
-
-        {/* MAIN CONTENT */}
-        <View style={styles.mainContent}>
-          {/* LOGIN BUTTON - LEFT */}
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={[styles.container, isCompact && styles.containerCompact]}>
+          {/* BACK BUTTON */}
           <TouchableOpacity
-            style={[styles.actionButton, styles.loginButton]}
-            onPress={handleLogin}
-            activeOpacity={0.85}
-            disabled={loading}
+            onPress={() => goBack("/")}
+            style={[styles.backButton, isCompact && styles.backButtonCompact]}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel="Back to the welcome page"
           >
-            <Text style={styles.buttonIcon}>♡</Text>
-
-            <Text style={styles.buttonTitle}>Log in</Text>
-
-            <Text style={styles.buttonDescription}>Welcome back!</Text>
-
-            <Text style={styles.buttonArrow}>→</Text>
+            <ArrowLeft size={16} color="#806A70" />
+            <Text style={styles.backText}>Back</Text>
           </TouchableOpacity>
 
-          {/* LAICA - CENTER */}
-          <View style={styles.mascotContainer}>
-            <AnimatedMascot animation="original" />
+          {/* HEADER */}
+          <View style={[styles.header, isCompact && styles.headerCompact]}>
+            <Text style={styles.logo}>PAWS & PAGES</Text>
+
+            <Text style={styles.subtitle}>
+              Your little corner of reading and learning ♡
+            </Text>
           </View>
 
-          {/* SIGNUP BUTTON - RIGHT */}
-          <TouchableOpacity
-            style={[styles.actionButton, styles.signupButton]}
-            onPress={handleSignup}
-            activeOpacity={0.85}
-            disabled={loading}
+          {/* MAIN CONTENT */}
+          <View
+            style={[styles.mainContent, isCompact && styles.mainContentCompact]}
           >
-            <Text style={styles.buttonIcon}>✧</Text>
+            {isCompact && (
+              <View style={styles.mascotContainerCompact}>
+                <AnimatedMascot animation="original" size={210} />
+              </View>
+            )}
 
-            <Text style={styles.buttonTitle}>Create an account</Text>
+            {/* LOGIN BUTTON */}
+            <TouchableOpacity
+              style={[
+                styles.actionButton,
+                styles.loginButton,
+                isCompact && styles.actionButtonCompact,
+              ]}
+              onPress={() => startAuth("login")}
+              activeOpacity={0.85}
+              disabled={loading}
+              accessibilityRole="button"
+              accessibilityLabel="Log in"
+              accessibilityHint="Opens the secure Auth0 login page"
+            >
+              <Text style={styles.buttonIcon}>♡</Text>
+              <Text style={styles.buttonTitle}>Log in</Text>
+              <Text style={styles.buttonDescription}>Welcome back!</Text>
+              <Text style={styles.buttonArrow}>→</Text>
+            </TouchableOpacity>
 
-            <Text style={styles.buttonDescription}>Join our little world!</Text>
+            {/* LAICA - CENTER */}
+            {!isCompact && (
+              <View style={styles.mascotContainer}>
+                <AnimatedMascot animation="original" />
+              </View>
+            )}
 
-            <Text style={styles.buttonArrow}>→</Text>
-          </TouchableOpacity>
+            {/* SIGNUP BUTTON */}
+            <TouchableOpacity
+              style={[
+                styles.actionButton,
+                styles.signupButton,
+                isCompact && styles.actionButtonCompact,
+              ]}
+              onPress={() => startAuth("signup")}
+              activeOpacity={0.85}
+              disabled={loading}
+              accessibilityRole="button"
+              accessibilityLabel="Create an account"
+              accessibilityHint="Opens the secure Auth0 sign up page"
+            >
+              <Text style={styles.buttonIcon}>✧</Text>
+              <Text style={styles.buttonTitle}>Create an account</Text>
+              <Text style={styles.buttonDescription}>
+                Join our little world!
+              </Text>
+              <Text style={styles.buttonArrow}>→</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* ERROR */}
+          {errorMessage !== "" && (
+            <Notice
+              tone="error"
+              message={errorMessage}
+              onDismiss={() => setErrorMessage("")}
+              style={styles.errorNotice}
+            />
+          )}
+
+          {/* FOOTER */}
+          <View style={styles.footer}>
+            <Text style={styles.footerPaw}>🐾</Text>
+
+            <Text style={styles.footerText}>
+              Secure sign in with Auth0. A safe little space for big adventures ♡
+            </Text>
+          </View>
         </View>
-
-        {/* ERROR */}
-        {errorMessage !== "" && (
-          <Text style={styles.error}>{errorMessage}</Text>
-        )}
-
-        {/* FOOTER */}
-        <View style={styles.footer}>
-          <Text style={styles.footerPaw}>🐾</Text>
-
-          <Text style={styles.footerText}>
-            A safe little space for big adventures ♡
-          </Text>
-        </View>
-      </View>
+      </ScrollView>
     </SafeAreaView>
   );
 }
@@ -397,6 +453,10 @@ const styles = StyleSheet.create({
     backgroundColor: "#FFF8F1",
   },
 
+  scrollContent: {
+    flexGrow: 1,
+  },
+
   container: {
     flex: 1,
     width: "100%",
@@ -406,18 +466,38 @@ const styles = StyleSheet.create({
     paddingVertical: 20,
   },
 
+  containerCompact: {
+    paddingHorizontal: 20,
+    justifyContent: "flex-start",
+  },
+
+  centered: {
+    justifyContent: "center",
+  },
+
   backButton: {
     position: "absolute",
     top: 20,
     left: 30,
     zIndex: 5,
     padding: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    minHeight: 40,
+  },
+
+  backButtonCompact: {
+    position: "relative",
+    top: 0,
+    left: 0,
+    alignSelf: "flex-start",
   },
 
   backText: {
     color: "#806A70",
     fontSize: 14,
-    fontWeight: "700",
+    fontFamily: "Nunito_700Bold",
   },
 
   header: {
@@ -425,10 +505,14 @@ const styles = StyleSheet.create({
     marginTop: 12,
   },
 
+  headerCompact: {
+    marginTop: 4,
+  },
+
   logo: {
     color: "#735E64",
     fontSize: 19,
-    fontWeight: "900",
+    fontFamily: "PlayfairDisplay_700Bold",
     letterSpacing: 5,
   },
 
@@ -436,6 +520,7 @@ const styles = StyleSheet.create({
     color: "#A78B9A",
     fontSize: 12,
     marginTop: 8,
+    textAlign: "center",
   },
 
   mainContent: {
@@ -447,11 +532,25 @@ const styles = StyleSheet.create({
     gap: 20,
   },
 
+  mainContentCompact: {
+    flex: 0,
+    flexDirection: "column",
+    gap: 14,
+    marginVertical: 18,
+    maxWidth: 420,
+  },
+
   mascotContainer: {
     width: "36%",
     height: 250,
     alignItems: "center",
     justifyContent: "center",
+  },
+
+  mascotContainerCompact: {
+    alignItems: "center",
+    justifyContent: "center",
+    height: 200,
   },
 
   actionButton: {
@@ -474,6 +573,14 @@ const styles = StyleSheet.create({
     elevation: 5,
   },
 
+  actionButtonCompact: {
+    flex: 0,
+    width: "100%",
+    maxWidth: "100%",
+    minHeight: 0,
+    paddingVertical: 20,
+  },
+
   loginButton: {
     backgroundColor: "#D69BA5",
   },
@@ -491,7 +598,7 @@ const styles = StyleSheet.create({
   buttonTitle: {
     color: "#FFFFFF",
     fontSize: 19,
-    fontWeight: "900",
+    fontFamily: "Nunito_800ExtraBold",
     textAlign: "center",
   },
 
@@ -506,15 +613,14 @@ const styles = StyleSheet.create({
   buttonArrow: {
     color: "#FFFFFF",
     fontSize: 24,
-    fontWeight: "700",
+    fontFamily: "Nunito_700Bold",
     marginTop: 15,
   },
 
-  error: {
-    color: "#B44B58",
-    fontSize: 12,
-    textAlign: "center",
-    marginBottom: 8,
+  errorNotice: {
+    width: "100%",
+    maxWidth: 560,
+    marginBottom: 12,
   },
 
   footer: {
@@ -530,6 +636,7 @@ const styles = StyleSheet.create({
   footerText: {
     color: "#A78B9A",
     fontSize: 11,
+    textAlign: "center",
   },
 
   loadingContainer: {
@@ -543,5 +650,78 @@ const styles = StyleSheet.create({
     color: "#A78B9A",
     marginTop: 15,
     fontSize: 13,
+  },
+
+  syncCard: {
+    width: "100%",
+    maxWidth: 460,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 28,
+    padding: 26,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#F1E3DA",
+    shadowColor: "#735E64",
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 4,
+  },
+
+  syncTitle: {
+    color: "#493653",
+    fontSize: 21,
+    fontFamily: "PlayfairDisplay_700Bold",
+    textAlign: "center",
+    marginTop: 6,
+  },
+
+  syncText: {
+    color: "#806B87",
+    fontSize: 13,
+    lineHeight: 19,
+    textAlign: "center",
+    marginTop: 8,
+  },
+
+  syncNotice: {
+    alignSelf: "stretch",
+    marginTop: 16,
+  },
+
+  primaryButton: {
+    alignSelf: "stretch",
+    minHeight: 50,
+    marginTop: 18,
+    borderRadius: 16,
+    backgroundColor: "#D69BA5",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 9,
+  },
+
+  primaryButtonText: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontFamily: "Nunito_800ExtraBold",
+  },
+
+  secondaryButton: {
+    alignSelf: "stretch",
+    minHeight: 46,
+    marginTop: 10,
+    borderRadius: 16,
+    backgroundColor: "#FFF8F1",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+
+  secondaryButtonText: {
+    color: "#806A70",
+    fontSize: 13,
+    fontFamily: "Nunito_700Bold",
   },
 });

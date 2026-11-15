@@ -16,6 +16,7 @@
     "cors": "latest",
     "dotenv": "latest",
     "express": "latest",
+    "express-oauth2-jwt-bearer": "^1.11.0",
     "jszip": "latest",
     "mammoth": "latest",
     "multer": "latest",

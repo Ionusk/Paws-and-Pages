@@ -1,28 +1,35 @@
-import { router } from "expo-router";
+import { router, type Href } from "expo-router";
 import {
-  ArrowLeft,
-  ArrowRight,
-  BookOpen,
-  CalendarCheck,
-  Check,
-  Clock3,
-  Coins,
-  GraduationCap,
-  LibraryBig,
-  PenLine,
-  Sparkles,
-  Trophy,
+    ArrowLeft,
+    ArrowRight,
+    BookOpen,
+    CalendarCheck,
+    Check,
+    Clock3,
+    Coins,
+    GraduationCap,
+    LibraryBig,
+    Lock,
+    PenLine,
+    Sparkles,
+    Trophy,
 } from "lucide-react-native";
 import {
-  Pressable,
-  SafeAreaView,
-  ScrollView,
-  StatusBar,
-  StyleSheet,
-  Text,
-  View,
+    Pressable,
+    SafeAreaView,
+    ScrollView,
+    StatusBar,
+    StyleSheet,
+    Text,
+    useWindowDimensions,
+    View,
 } from "react-native";
 
+import { Notice } from "@/components/ui/feedback";
+import { COMPACT_BREAKPOINT } from "@/constants/palette";
+import { useProgressStats } from "@/hooks/useProgressStats";
+import { goBack } from "@/lib/navigation";
+import type { ReadingBook, ReadingSessionRecord } from "@/lib/readingApi";
 import { usePawWallet } from "../hooks/usePawWallet";
 
 const COLORS = {
@@ -40,18 +47,48 @@ const COLORS = {
   border: "#E7D9EE",
 };
 
+type QuestData = {
+  books: ReadingBook[];
+  sessions: ReadingSessionRecord[];
+};
+
 type Quest = {
   id: string;
   title: string;
   description: string;
   reward: number;
-  progress: number;
   target: number;
+  unit: string;
   category: string;
   icon: typeof BookOpen;
   color: string;
   iconColor: string;
+  /** Returns current progress, or null when it can't be tracked yet. */
+  measure: ((data: QuestData) => number) | null;
+  unavailableReason?: string;
+  action?: { label: string; route: Href };
 };
+
+function isToday(iso: string | undefined) {
+  if (!iso) return false;
+  const date = new Date(iso);
+  const now = new Date();
+
+  return (
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate()
+  );
+}
+
+/** Monday 00:00 of the current week, in local time. */
+function startOfWeek() {
+  const now = new Date();
+  const day = (now.getDay() + 6) % 7; // 0 = Monday
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  start.setDate(start.getDate() - day);
+  return start;
+}
 
 const dailyQuests: Quest[] = [
   {
@@ -59,36 +96,47 @@ const dailyQuests: Quest[] = [
     title: "A little reading",
     description: "Read for 20 minutes today.",
     reward: 15,
-    progress: 0,
     target: 20,
+    unit: "min",
     category: "READING",
     icon: BookOpen,
     color: COLORS.lightPink,
     iconColor: COLORS.darkPink,
+    measure: ({ sessions }) =>
+      Math.floor(
+        sessions
+          .filter((session) => isToday(session.date))
+          .reduce((total, session) => total + session.durationSeconds, 0) / 60,
+      ),
+    action: { label: "Start a reading session", route: "/reading/session" },
   },
   {
     id: "book",
     title: "New beginnings",
-    description: "Add a new book to your collection.",
+    description: "Add a new book to your collection today.",
     reward: 10,
-    progress: 0,
     target: 1,
+    unit: "book",
     category: "COLLECTION",
     icon: LibraryBig,
     color: COLORS.lavender,
     iconColor: COLORS.purple,
+    measure: ({ books }) => books.filter((book) => isToday(book.createdAt)).length,
+    action: { label: "Add a book", route: "/reading/add-book" },
   },
   {
     id: "review",
     title: "Share your thoughts",
     description: "Write a review for a book.",
     reward: 20,
-    progress: 0,
     target: 1,
+    unit: "review",
     category: "COMMUNITY",
     icon: PenLine,
     color: COLORS.peach,
     iconColor: "#A77C6C",
+    measure: null,
+    unavailableReason: "Book reviews can't be saved yet.",
   },
 ];
 
@@ -98,46 +146,84 @@ const weeklyQuests: Quest[] = [
     title: "Consistency is key",
     description: "Read on 5 different days this week.",
     reward: 60,
-    progress: 0,
     target: 5,
+    unit: "days",
     category: "CONSISTENCY",
     icon: CalendarCheck,
     color: COLORS.sage,
     iconColor: "#71866F",
+    measure: ({ sessions }) => {
+      const weekStart = startOfWeek().getTime();
+      const days = new Set(
+        sessions
+          .filter((session) => new Date(session.date).getTime() >= weekStart)
+          .map((session) => new Date(session.date).toDateString()),
+      );
+      return days.size;
+    },
+    action: { label: "Start a reading session", route: "/reading/session" },
   },
   {
     id: "finish",
     title: "The final chapter",
     description: "Finish reading a book this week.",
     reward: 100,
-    progress: 0,
     target: 1,
+    unit: "book",
     category: "ACHIEVEMENT",
     icon: Trophy,
     color: COLORS.peach,
     iconColor: "#A77C6C",
+    measure: null,
+    unavailableReason:
+      "Updating your current page isn't possible yet, so finished books can't be tracked.",
   },
   {
     id: "study",
     title: "Curious minds",
     description: "Complete 3 study sessions this week.",
     reward: 45,
-    progress: 0,
     target: 3,
+    unit: "sessions",
     category: "LEARNING",
     icon: GraduationCap,
     color: COLORS.lavender,
     iconColor: COLORS.purple,
+    measure: null,
+    unavailableReason: "Study sessions aren't tracked by date yet.",
   },
 ];
 
-function QuestCard({ quest }: { quest: Quest }) {
+function QuestCard({
+  quest,
+  data,
+  loading,
+}: {
+  quest: Quest;
+  data: QuestData | null;
+  loading: boolean;
+}) {
   const Icon = quest.icon;
-  const progress = Math.min(quest.progress / quest.target, 1);
-  const completed = quest.progress >= quest.target;
+  const unavailable = quest.measure === null;
+  const value =
+    !unavailable && data && quest.measure ? quest.measure(data) : null;
+  const progress = value !== null ? Math.min(value / quest.target, 1) : 0;
+  const completed = value !== null && value >= quest.target;
+
+  const status = unavailable
+    ? "Not available yet"
+    : value === null
+      ? loading
+        ? "Checking..."
+        : "Progress unavailable"
+      : completed
+        ? "Completed"
+        : value > 0
+          ? "In progress"
+          : "Not started";
 
   return (
-    <View style={styles.questCard}>
+    <View style={[styles.questCard, unavailable && styles.questCardUnavailable]}>
       <View style={styles.questTop}>
         <View style={[styles.questIcon, { backgroundColor: quest.color }]}>
           <Icon size={23} color={quest.iconColor} strokeWidth={1.7} />
@@ -155,50 +241,87 @@ function QuestCard({ quest }: { quest: Quest }) {
         <Text style={styles.questDescription}>{quest.description}</Text>
       </View>
 
-      <View style={styles.progressSection}>
-        <View style={styles.progressLabels}>
-          <Text style={styles.progressLabel}>YOUR PROGRESS</Text>
-          <Text style={styles.progressValue}>
-            {quest.progress}/{quest.target}
-          </Text>
+      {unavailable ? (
+        <View style={styles.unavailableBox}>
+          <Lock size={14} color={COLORS.muted} />
+          <Text style={styles.unavailableText}>{quest.unavailableReason}</Text>
         </View>
+      ) : (
+        <View style={styles.progressSection}>
+          <View style={styles.progressLabels}>
+            <Text style={styles.progressLabel}>YOUR PROGRESS</Text>
+            <Text style={styles.progressValue}>
+              {value === null ? "—" : Math.min(value, quest.target)}/
+              {quest.target} {quest.unit}
+            </Text>
+          </View>
 
-        <View style={styles.progressTrack}>
           <View
-            style={[
-              styles.progressFill,
-              {
-                width: `${progress * 100}%`,
-                backgroundColor: completed ? "#8BA486" : COLORS.darkPink,
-              },
-            ]}
-          />
+            style={styles.progressTrack}
+            accessible
+            accessibilityRole="progressbar"
+            accessibilityValue={{
+              min: 0,
+              max: quest.target,
+              now: value === null ? 0 : Math.min(value, quest.target),
+            }}
+          >
+            <View
+              style={[
+                styles.progressFill,
+                {
+                  width: `${progress * 100}%`,
+                  backgroundColor: completed ? "#8BA486" : COLORS.darkPink,
+                },
+              ]}
+            />
+          </View>
         </View>
-      </View>
+      )}
 
       <View style={styles.questFooter}>
         <View style={styles.questStatus}>
           {completed ? (
             <Check size={14} color="#71866F" />
+          ) : unavailable ? (
+            <Lock size={14} color={COLORS.muted} />
           ) : (
             <Clock3 size={14} color={COLORS.muted} />
           )}
           <Text style={[styles.statusText, completed && { color: "#71866F" }]}>
-            {completed ? "Completed" : "In progress"}
+            {status}
           </Text>
         </View>
 
-        <Text style={styles.rewardCaption}>
-          {completed ? "Reward ready" : "Keep going!"}
-        </Text>
+        {completed ? (
+          <Text style={styles.rewardCaption}>Reward payouts coming soon</Text>
+        ) : !unavailable && quest.action ? (
+          <Pressable
+            onPress={() => router.push(quest.action!.route)}
+            style={({ pressed }) => [styles.questAction, pressed && styles.pressed]}
+            accessibilityRole="button"
+          >
+            <Text style={styles.questActionText}>{quest.action.label}</Text>
+            <ArrowRight size={14} color={COLORS.text} />
+          </Pressable>
+        ) : null}
       </View>
     </View>
   );
 }
 
 export default function QuestsScreen() {
+  const { width } = useWindowDimensions();
+  const isCompact = width < COMPACT_BREAKPOINT;
+
   const { balance, loading: walletLoading } = usePawWallet();
   const displayedBalance = walletLoading ? "..." : (balance ?? "—");
+
+  const { stats, loading: statsLoading, error: statsError, refresh } =
+    useProgressStats();
+  const questData: QuestData | null = stats
+    ? { books: stats.books, sessions: stats.sessions }
+    : null;
 
   const totalDailyRewards = dailyQuests.reduce(
     (total, quest) => total + quest.reward,
@@ -216,17 +339,22 @@ export default function QuestsScreen() {
 
       <ScrollView
         style={styles.container}
-        contentContainerStyle={styles.content}
+        contentContainerStyle={[
+          styles.content,
+          isCompact && styles.contentCompact,
+        ]}
         showsVerticalScrollIndicator={false}
       >
         {/* HEADER */}
         <View style={styles.header}>
           <Pressable
-            onPress={() => router.back()}
+            onPress={() => goBack("/home")}
             style={({ pressed }) => [
               styles.backButton,
               pressed && styles.pressed,
             ]}
+            accessibilityRole="button"
+            accessibilityLabel="Go back"
           >
             <ArrowLeft size={21} color={COLORS.text} strokeWidth={1.8} />
           </Pressable>
@@ -245,15 +373,15 @@ export default function QuestsScreen() {
         </View>
 
         {/* HERO */}
-        <View style={styles.heroCard}>
+        <View style={[styles.heroCard, isCompact && styles.heroCardCompact]}>
           <View style={styles.heroText}>
             <Text style={styles.heroEyebrow}>A LITTLE CHALLENGE</Text>
             <Text style={styles.heroTitle}>
               Every chapter{"\n"}is an adventure.
             </Text>
             <Text style={styles.heroDescription}>
-              Complete quests, build good habits and earn Paw Tokens along the
-              way.
+              Complete quests and build good reading habits. Progress updates
+              from your real reading sessions and books.
             </Text>
           </View>
 
@@ -278,13 +406,28 @@ export default function QuestsScreen() {
           </View>
           <View style={styles.rewardSummary}>
             <Text style={styles.summaryNumber}>{totalDailyRewards}</Text>
-            <Text style={styles.summaryLabel}>PAW available</Text>
+            <Text style={styles.summaryLabel}>PAW in rewards</Text>
           </View>
         </View>
 
+        {statsError ? (
+          <Notice
+            tone="error"
+            message={`We couldn't load your quest progress. ${statsError}`}
+            actionLabel="Try again"
+            onAction={refresh}
+            style={styles.statsNotice}
+          />
+        ) : null}
+
         <View style={styles.questList}>
           {dailyQuests.map((quest) => (
-            <QuestCard key={quest.id} quest={quest} />
+            <QuestCard
+              key={quest.id}
+              quest={quest}
+              data={questData}
+              loading={statsLoading}
+            />
           ))}
         </View>
 
@@ -303,13 +446,18 @@ export default function QuestsScreen() {
           </View>
           <View style={styles.rewardSummary}>
             <Text style={styles.summaryNumber}>{totalWeeklyRewards}</Text>
-            <Text style={styles.summaryLabel}>PAW available</Text>
+            <Text style={styles.summaryLabel}>PAW in rewards</Text>
           </View>
         </View>
 
         <View style={styles.questList}>
           {weeklyQuests.map((quest) => (
-            <QuestCard key={quest.id} quest={quest} />
+            <QuestCard
+              key={quest.id}
+              quest={quest}
+              data={questData}
+              loading={statsLoading}
+            />
           ))}
         </View>
 
@@ -321,8 +469,9 @@ export default function QuestsScreen() {
           <View style={styles.infoTextContainer}>
             <Text style={styles.infoTitle}>Your effort deserves a reward.</Text>
             <Text style={styles.infoDescription}>
-              Paw Tokens will be earned and verified through Solana. Complete
-              your activities and watch your collection grow.
+              Quest rewards aren’t paid out yet: completing a quest doesn’t add
+              PAW to your wallet for now. When payouts arrive, they’ll be sent
+              and verified on Solana.
             </Text>
           </View>
         </View>
@@ -332,7 +481,7 @@ export default function QuestsScreen() {
           style={({ pressed }) => [styles.shopLink, pressed && styles.pressed]}
           onPress={() => router.push("/shop")}
         >
-          <Text style={styles.shopLinkText}>Explore Laica's Shop</Text>
+          <Text style={styles.shopLinkText}>Explore Laica’s Shop</Text>
           <ArrowRight size={18} color={COLORS.text} />
         </Pressable>
 
@@ -509,6 +658,49 @@ const styles = StyleSheet.create({
   questList: {
     gap: 13,
     marginBottom: 35,
+  },
+  contentCompact: {
+    paddingHorizontal: 18,
+  },
+  heroCardCompact: {
+    padding: 22,
+    minHeight: 0,
+  },
+  statsNotice: {
+    marginBottom: 13,
+  },
+  questCardUnavailable: {
+    backgroundColor: "#FBF8FC",
+  },
+  unavailableBox: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: "#F3EEF5",
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  unavailableText: {
+    flex: 1,
+    fontSize: 11,
+    lineHeight: 16,
+    fontFamily: "Nunito_600SemiBold",
+    color: COLORS.muted,
+  },
+  questAction: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    minHeight: 36,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    backgroundColor: COLORS.lightPink,
+  },
+  questActionText: {
+    fontSize: 11,
+    fontFamily: "Nunito_800ExtraBold",
+    color: COLORS.text,
   },
   questCard: {
     backgroundColor: COLORS.white,

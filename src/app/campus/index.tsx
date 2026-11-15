@@ -1,109 +1,127 @@
-import React from 'react';
 import {
-  View, Text, StyleSheet, SafeAreaView,
-  ScrollView, TouchableOpacity, Alert,
-} from 'react-native';
-import { router } from 'expo-router';
+    ArrowLeftRight,
+    BookUp,
+    History,
+    LibraryBig,
+    Search,
+    ShieldCheck,
+} from 'lucide-react-native';
+import { StyleSheet, Text, View } from 'react-native';
+import { useAuth0 } from 'react-native-auth0';
 
+import { ComingSoonScreen } from '@/components/ui/ComingSoonScreen';
+import { FONT, PALETTE } from '@/constants/palette';
+
+// Campus Books needs UPT student verification plus listing and loan
+// endpoints. None of these exist in the backend yet, so the screen shows the
+// access rules and planned features without simulating them.
 export default function CampusScreen() {
+  const { user } = useAuth0();
+
   return (
-    <SafeAreaView style={styles.safe}>
-      <ScrollView contentContainerStyle={styles.container}>
-        <TouchableOpacity onPress={() => router.back()}>
-          <Text style={styles.back}>← Back</Text>
-        </TouchableOpacity>
-
-        <Text style={styles.eyebrow}>THE CAMPUS BOOK CORNER 🏡</Text>
-        <Text style={styles.title}>Books bring us together.</Text>
-        <Text style={styles.subtitle}>
-          Borrow a book, share one with another student and discover your next read.
-        </Text>
-
-        <View style={styles.hero}>
-          <Text style={{ fontSize: 60 }}>📚</Text>
-          <Text style={styles.heroTitle}>A library made by students.</Text>
-          <Text style={styles.heroText}>
-            Find books available from other students in your university community.
-          </Text>
+    <ComingSoonScreen
+      eyebrow="THE CAMPUS BOOK CORNER"
+      title="Books bring us together."
+      subtitle="Borrow a book, share one with another student and discover your next read."
+      heroIcon={LibraryBig}
+      heroTitle="A library made by students"
+      heroText="Campus Books isn't open yet. It will let verified UPT students lend and borrow books from each other."
+      heroColor={PALETTE.sage}
+      features={[
+        {
+          icon: Search,
+          title: 'Browse available books',
+          description: 'Discover books offered by other UPT students.',
+          color: PALETTE.lavender,
+          iconColor: PALETTE.purple,
+        },
+        {
+          icon: BookUp,
+          title: 'Share a book',
+          description: 'Publish books you are happy to lend.',
+        },
+        {
+          icon: ArrowLeftRight,
+          title: 'Request and manage loans',
+          description: 'Ask to borrow a book and accept or decline requests.',
+          color: PALETTE.peach,
+          iconColor: '#A77C6C',
+        },
+        {
+          icon: History,
+          title: 'Active and past loans',
+          description: 'Keep track of what you borrowed and lent.',
+          color: PALETTE.sage,
+          iconColor: PALETTE.sageDark,
+        },
+      ]}
+      note={{
+        title: 'A safe student community ♡',
+        text: 'Personal contact details and meeting arrangements will stay private until a borrowing request is accepted.',
+      }}
+    >
+      <View style={styles.accessCard}>
+        <View style={styles.accessIcon}>
+          <ShieldCheck size={22} color={PALETTE.sageDark} />
         </View>
 
-        <TouchableOpacity
-          style={styles.primary}
-          onPress={() => Alert.alert('Coming soon', 'The book marketplace is being prepared!')}
-        >
-          <Text style={styles.primaryText}>🔎  Browse available books</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.secondary}
-          onPress={() => Alert.alert('Coming soon', 'You will be able to list your books here!')}
-        >
-          <Text style={styles.secondaryText}>＋  Share a book</Text>
-        </TouchableOpacity>
-
-        <View style={styles.info}>
-          <Text style={styles.infoTitle}>A safe student community ♡</Text>
-          <Text style={styles.infoText}>
-            Only verified university students will be able to participate.
-            Personal contact details and meeting arrangements should stay private
-            until a borrowing request is accepted.
+        <View style={styles.accessText}>
+          <Text style={styles.accessTitle}>Who can join</Text>
+          <Text style={styles.accessDescription}>
+            Only users with a verified UPT student account will have access.
+            Student verification isn’t available yet, so no account can be
+            verified at the moment.
           </Text>
+
+          {user?.email ? (
+            <Text style={styles.accessStatus}>
+              Signed in as {user.email} · not verified
+            </Text>
+          ) : null}
         </View>
-      </ScrollView>
-    </SafeAreaView>
+      </View>
+    </ComingSoonScreen>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#FFF8F1' },
-  container: { padding: 22, paddingBottom: 40 },
-  back: { color: '#9B8588', marginBottom: 28 },
-  eyebrow: {
-    color: '#DDA6AD', fontSize: 10,
-    fontWeight: '800', letterSpacing: 2,
+  accessCard: {
+    flexDirection: 'row',
+    gap: 14,
+    backgroundColor: PALETTE.white,
+    borderRadius: 20,
+    padding: 18,
+    marginTop: 18,
+    borderWidth: 1,
+    borderColor: PALETTE.border,
   },
-  title: {
-    color: '#59484C', fontSize: 31,
-    fontWeight: '800', marginTop: 8,
+  accessIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 15,
+    backgroundColor: PALETTE.sage,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  subtitle: {
-    color: '#9B8588', fontSize: 14,
-    lineHeight: 21, marginTop: 8, marginBottom: 25,
+  accessText: {
+    flex: 1,
   },
-  hero: {
-    backgroundColor: '#DCE6D8', borderRadius: 25,
-    alignItems: 'center', padding: 25,
+  accessTitle: {
+    color: PALETTE.text,
+    fontSize: 14,
+    fontFamily: FONT.bodyExtraBold,
   },
-  heroTitle: {
-    color: '#59484C', fontSize: 21,
-    fontWeight: '800', textAlign: 'center', marginTop: 15,
+  accessDescription: {
+    color: PALETTE.muted,
+    fontSize: 12,
+    lineHeight: 18,
+    fontFamily: FONT.body,
+    marginTop: 4,
   },
-  heroText: {
-    color: '#788477', fontSize: 13,
-    lineHeight: 20, textAlign: 'center', marginTop: 8,
-  },
-  primary: {
-    backgroundColor: '#DDA6AD', padding: 19,
-    borderRadius: 18, marginTop: 22,
-  },
-  primaryText: {
-    color: 'white', fontWeight: '800',
-    textAlign: 'center', fontSize: 15,
-  },
-  secondary: {
-    backgroundColor: 'white', padding: 19,
-    borderRadius: 18, marginTop: 12,
-  },
-  secondaryText: {
-    color: '#9B6874', fontWeight: '800', textAlign: 'center',
-  },
-  info: {
-    backgroundColor: '#F4E8ED', borderRadius: 20,
-    padding: 20, marginTop: 28,
-  },
-  infoTitle: { color: '#59484C', fontWeight: '800', fontSize: 15 },
-  infoText: {
-    color: '#897C80', fontSize: 12,
-    lineHeight: 19, marginTop: 8,
+  accessStatus: {
+    color: PALETTE.darkPink,
+    fontSize: 11,
+    fontFamily: FONT.bodyBold,
+    marginTop: 8,
   },
 });

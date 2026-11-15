@@ -1,18 +1,22 @@
-import { GoogleGenAI } from "@google/genai";
+
+import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
-import express from "express";
-import { auth } from "express-oauth2-jwt-bearer";
-import JSZip from "jszip";
-import mammoth from "mammoth";
 import multer from "multer";
+import mammoth from "mammoth";
+import JSZip from "jszip";
 import sharp from "sharp";
-
+import { GoogleGenAI } from "@google/genai";
+import { auth } from "express-oauth2-jwt-bearer";
 import { pool } from "./db.js";
 import { createShopRouter } from "./shop.js";
 import { getOrCreateUserWallet, getPawBalance } from "./solana.js";
 
 dotenv.config();
+
+// =========================================================
+// SERVER INITIALIZATION
+// =========================================================
 
 if (!process.env.GEMINI_API_KEY) {
   throw new Error("Lipsește GEMINI_API_KEY din server/.env");
@@ -29,39 +33,388 @@ if (!process.env.AUTH0_AUDIENCE) {
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-const PRIMARY_MODEL = process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
+app.use(cors());
+// 2mb: transcrierile conversațiilor vocale lungi depășesc limita implicită de 100kb.
+app.use(express.json({ limit: "2mb" }));
 
-const FALLBACK_MODEL = process.env.GEMINI_FALLBACK_MODEL || "gemini-3.8-flash";
-
-// --------------------------------------------------
+// =========================================================
 // AUTH0
-// --------------------------------------------------
+// =========================================================
 
 const requireAuth = auth({
   issuerBaseURL: `https://${process.env.AUTH0_DOMAIN}/`,
   audience: process.env.AUTH0_AUDIENCE,
 });
 
-// --------------------------------------------------
-// GENERAL CONFIG
-// --------------------------------------------------
-
-app.use(cors());
-app.use(express.json());
-
-// --------------------------------------------------
+// =========================================================
 // SHOP - SOLANA PAW TOKEN
-// --------------------------------------------------
+// =========================================================
 
 app.use("/api/shop", createShopRouter({ requireAuth }));
+
+// =========================================================
+// GEMINI CONFIGURATION
+// =========================================================
+
+const PRIMARY_MODEL =
+  process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
+
+const FALLBACK_MODEL =
+  process.env.GEMINI_FALLBACK_MODEL || "gemini-3.8-flash";
 
 const ai = new GoogleGenAI({
   apiKey: process.env.GEMINI_API_KEY,
 });
 
-// --------------------------------------------------
-// FILE UPLOAD
-// --------------------------------------------------
+// =========================================================
+// COVER UPLOAD CONFIGURATION
+// =========================================================
+
+const coverUpload = multer({
+  storage: multer.memoryStorage(),
+
+  limits: {
+    fileSize: 10 * 1024 * 1024,
+  },
+
+  fileFilter: (req, file, callback) => {
+    if (!file.mimetype.startsWith("image/")) {
+      return callback(
+        new Error("Coperta trebuie să fie o imagine.")
+      );
+    }
+
+    callback(null, true);
+  },
+});
+
+// =========================================================
+// READING – TIGERDATA
+// =========================================================
+
+// Identificăm ID-ul intern al utilizatorului din tabela users
+async function getReadingUserId(req) {
+  const auth0Id = req.auth?.payload?.sub;
+
+  if (!auth0Id) {
+    throw new Error("Utilizatorul nu este autentificat.");
+  }
+
+  const result = await pool.query(
+    `SELECT id
+     FROM users
+     WHERE auth0_id = $1
+     LIMIT 1`,
+    [auth0Id]
+  );
+
+  if (result.rows.length === 0) {
+    throw new Error(
+      "Utilizatorul nu există în TigerData. Reconectează-te în aplicație."
+    );
+  }
+
+  return String(result.rows[0].id);
+}
+
+// GET – toate cărțile utilizatorului, inclusiv coperțile
+app.get(
+  "/api/reading/books",
+  requireAuth,
+  async (req, res, next) => {
+    try {
+      const userId = await getReadingUserId(req);
+
+      const result = await pool.query(
+        `SELECT
+          id,
+          title,
+          author,
+          total_pages AS pages,
+          current_page AS "currentPage",
+          created_at AS "createdAt",
+
+          CASE
+            WHEN cover_data IS NOT NULL
+            THEN
+              'data:' ||
+              COALESCE(cover_mime_type, 'image/jpeg') ||
+              ';base64,' ||
+              replace(encode(cover_data, 'base64'), E'\n', '')
+            ELSE cover_url
+          END AS "coverUrl"
+
+         FROM reading_books
+         WHERE user_id = $1
+         ORDER BY created_at DESC`,
+        [userId]
+      );
+
+      res.json({
+        success: true,
+        books: result.rows,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+// POST – adaugă o carte și coperta ei
+app.post(
+  "/api/reading/books",
+  requireAuth,
+  coverUpload.single("cover"),
+  async (req, res, next) => {
+    try {
+      console.log("\n========== UPLOAD DEBUG ==========");
+      console.log(
+        "CONTENT TYPE:",
+        req.headers["content-type"]
+      );
+      console.log("BODY:", req.body);
+
+      console.log(
+        "FILE:",
+        req.file
+          ? {
+              originalname: req.file.originalname,
+              mimetype: req.file.mimetype,
+              size: req.file.size,
+            }
+          : null
+      );
+
+      const userId = await getReadingUserId(req);
+
+      const {
+        title,
+        author,
+        pages,
+        currentPage = "0",
+      } = req.body || {};
+
+      const parsedPages = Number(pages);
+      const parsedCurrentPage = Number(currentPage);
+
+      if (!title?.trim()) {
+        return res.status(400).json({
+          success: false,
+          error: "Titlul este obligatoriu.",
+        });
+      }
+
+      if (
+        !Number.isInteger(parsedPages) ||
+        parsedPages <= 0
+      ) {
+        return res.status(400).json({
+          success: false,
+          error: "Numărul de pagini este invalid.",
+        });
+      }
+
+      if (
+        !Number.isInteger(parsedCurrentPage) ||
+        parsedCurrentPage < 0 ||
+        parsedCurrentPage > parsedPages
+      ) {
+        return res.status(400).json({
+          success: false,
+          error: "Pagina curentă este invalidă.",
+        });
+      }
+
+      const coverBuffer = req.file
+        ? req.file.buffer
+        : null;
+
+      const coverMimeType = req.file
+        ? req.file.mimetype
+        : null;
+
+      const result = await pool.query(
+        `INSERT INTO reading_books
+          (
+            user_id,
+            title,
+            author,
+            total_pages,
+            current_page,
+            cover_url,
+            cover_data,
+            cover_mime_type
+          )
+         VALUES ($1, $2, $3, $4, $5, NULL, $6, $7)
+         RETURNING
+          id,
+          title,
+          author,
+          total_pages AS pages,
+          current_page AS "currentPage",
+          created_at AS "createdAt",
+
+          CASE
+            WHEN cover_data IS NOT NULL
+            THEN
+              'data:' ||
+              COALESCE(cover_mime_type, 'image/jpeg') ||
+              ';base64,' ||
+              replace(encode(cover_data, 'base64'), E'\n', '')
+            ELSE cover_url
+          END AS "coverUrl"`,
+        [
+          userId,
+          title.trim(),
+          author?.trim() || "Unknown author",
+          parsedPages,
+          parsedCurrentPage,
+          coverBuffer,
+          coverMimeType,
+        ]
+      );
+
+      console.log(
+        "Carte salvată în TigerData:",
+        result.rows[0].title
+      );
+
+      console.log(
+        "Copertă salvată:",
+        Boolean(coverBuffer)
+      );
+
+      console.log("==================================\n");
+
+      res.status(201).json({
+        success: true,
+        book: result.rows[0],
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+// GET – sesiunile utilizatorului
+app.get(
+  "/api/reading/sessions",
+  requireAuth,
+  async (req, res, next) => {
+    try {
+      const userId = await getReadingUserId(req);
+
+      const result = await pool.query(
+        `SELECT
+          id,
+          book_id AS "bookId",
+          duration_seconds AS "durationSeconds",
+          start_page AS "startPage",
+          end_page AS "endPage",
+          impressions,
+          created_at AS date
+         FROM reading_sessions
+         WHERE user_id = $1
+         ORDER BY created_at DESC`,
+        [userId]
+      );
+
+      res.json({
+        success: true,
+        sessions: result.rows,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// POST – salvează o sesiune de lectură
+app.post(
+  "/api/reading/sessions",
+  requireAuth,
+  async (req, res, next) => {
+    try {
+      const userId = await getReadingUserId(req);
+
+      const {
+        bookId = null,
+        durationSeconds,
+        startPage = 0,
+        endPage = 0,
+        impressions = "",
+      } = req.body || {};
+
+      if (
+        !Number.isInteger(durationSeconds) ||
+        durationSeconds <= 0 ||
+        !Number.isInteger(startPage) ||
+        startPage < 0 ||
+        !Number.isInteger(endPage) ||
+        endPage < 0
+      ) {
+        return res.status(400).json({
+          success: false,
+          error: "Datele sesiunii sunt invalide.",
+        });
+      }
+
+      if (bookId) {
+        const bookResult = await pool.query(
+          `SELECT id
+           FROM reading_books
+           WHERE id = $1 AND user_id = $2`,
+          [bookId, userId]
+        );
+
+        if (bookResult.rows.length === 0) {
+          return res.status(404).json({
+            success: false,
+            error: "Cartea nu a fost găsită.",
+          });
+        }
+      }
+
+      const result = await pool.query(
+        `INSERT INTO reading_sessions
+          (
+            user_id,
+            book_id,
+            duration_seconds,
+            start_page,
+            end_page,
+            impressions
+          )
+         VALUES ($1, $2, $3, $4, $5, $6)
+         RETURNING
+          id,
+          book_id AS "bookId",
+          duration_seconds AS "durationSeconds",
+          start_page AS "startPage",
+          end_page AS "endPage",
+          impressions,
+          created_at AS date`,
+        [
+          userId,
+          bookId,
+          durationSeconds,
+          startPage,
+          endPage,
+          impressions,
+        ]
+      );
+
+      res.status(201).json({
+        success: true,
+        session: result.rows[0],
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// =========================================================
+// FILE UPLOAD – STUDY MATERIALS
+// =========================================================
 
 const allowedExtensions = [
   ".pdf",
@@ -94,7 +447,9 @@ const upload = multer({
 
     if (!allowedExtensions.includes(extension)) {
       return callback(
-        new Error("Format nesuportat. Încarcă PDF, DOCX, PPTX sau o imagine."),
+        new Error(
+          "Format nesuportat. Încarcă PDF, DOCX, PPTX sau o imagine."
+        )
       );
     }
 
@@ -102,9 +457,9 @@ const upload = multer({
   },
 });
 
-// --------------------------------------------------
+// =========================================================
 // XML HELPERS
-// --------------------------------------------------
+// =========================================================
 
 function decodeXml(text) {
   return text
@@ -113,25 +468,33 @@ function decodeXml(text) {
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
     .replace(/&apos;/g, "'")
-    .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)))
+    .replace(/&#(\d+);/g, (_, code) =>
+      String.fromCodePoint(Number(code))
+    )
     .replace(/&#x([0-9a-f]+);/gi, (_, code) =>
-      String.fromCodePoint(parseInt(code, 16)),
+      String.fromCodePoint(parseInt(code, 16))
     );
 }
 
-// --------------------------------------------------
+// =========================================================
 // POWERPOINT EXTRACTION
-// --------------------------------------------------
+// =========================================================
 
 async function extractPptx(buffer) {
   const zip = await JSZip.loadAsync(buffer);
 
   const slideFiles = Object.keys(zip.files)
-    .filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name))
+    .filter((name) =>
+      /^ppt\/slides\/slide\d+\.xml$/.test(name)
+    )
     .sort((a, b) => {
-      const numberA = Number(a.match(/slide(\d+)\.xml$/)[1]);
+      const numberA = Number(
+        a.match(/slide(\d+)\.xml$/)[1]
+      );
 
-      const numberB = Number(b.match(/slide(\d+)\.xml$/)[1]);
+      const numberB = Number(
+        b.match(/slide(\d+)\.xml$/)[1]
+      );
 
       return numberA - numberB;
     });
@@ -141,21 +504,25 @@ async function extractPptx(buffer) {
   for (let i = 0; i < slideFiles.length; i++) {
     const xml = await zip.files[slideFiles[i]].async("string");
 
-    const texts = [...xml.matchAll(/<a:t[^>]*>([\s\S]*?)<\/a:t>/g)]
+    const texts = [
+      ...xml.matchAll(/<a:t[^>]*>([\s\S]*?)<\/a:t>/g),
+    ]
       .map((match) => decodeXml(match[1]))
       .filter(Boolean);
 
     if (texts.length > 0) {
-      slides.push(`Slide ${i + 1}:\n${texts.join(" ")}`);
+      slides.push(
+        `Slide ${i + 1}:\n${texts.join(" ")}`
+      );
     }
   }
 
   return slides.join("\n\n");
 }
 
-// --------------------------------------------------
+// =========================================================
 // GEMINI RESPONSE SCHEMA
-// --------------------------------------------------
+// =========================================================
 
 const responseSchema = {
   type: "object",
@@ -203,20 +570,33 @@ const responseSchema = {
           },
         },
 
-        required: ["question", "options", "correctAnswer", "explanation"],
+        required: [
+          "question",
+          "options",
+          "correctAnswer",
+          "explanation",
+        ],
       },
     },
   },
 
-  required: ["title", "summary", "keyPoints", "quiz"],
+  required: [
+    "title",
+    "summary",
+    "keyPoints",
+    "quiz",
+  ],
 };
 
-// --------------------------------------------------
+// =========================================================
 // GEMINI ERROR HELPERS
-// --------------------------------------------------
+// =========================================================
 
 function getErrorStatus(error) {
-  const status = error?.status || error?.code || error?.response?.status;
+  const status =
+    error?.status ||
+    error?.code ||
+    error?.response?.status;
 
   if (typeof status === "number") {
     return status;
@@ -224,7 +604,9 @@ function getErrorStatus(error) {
 
   const message = String(error?.message || "");
 
-  const match = message.match(/\b(400|401|403|404|429|500|502|503|504)\b/);
+  const match = message.match(
+    /\b(400|401|403|404|429|500|502|503|504)\b/
+  );
 
   return match ? Number(match[1]) : null;
 }
@@ -236,7 +618,9 @@ function isTemporaryError(error) {
     return true;
   }
 
-  const message = String(error?.message || "").toLowerCase();
+  const message = String(
+    error?.message || ""
+  ).toLowerCase();
 
   return (
     message.includes("fetch failed") ||
@@ -249,21 +633,27 @@ function isTemporaryError(error) {
 }
 
 function wait(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) =>
+    setTimeout(resolve, ms)
+  );
 }
 
-// --------------------------------------------------
+// =========================================================
 // GEMINI - MAXIMUM 5 ATTEMPTS
-// --------------------------------------------------
+// =========================================================
 
 async function generateWithModel(model, parts) {
   const maxAttempts = 5;
   let lastError;
 
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+  for (
+    let attempt = 1;
+    attempt <= maxAttempts;
+    attempt++
+  ) {
     try {
       console.log(
-        `Gemini model: ${model} | încercarea ${attempt}/${maxAttempts}`,
+        `Gemini model: ${model} | încercarea ${attempt}/${maxAttempts}`
       );
 
       const response = await ai.models.generateContent({
@@ -284,7 +674,9 @@ async function generateWithModel(model, parts) {
       });
 
       if (!response.text) {
-        throw new Error("Gemini nu a returnat un răspuns.");
+        throw new Error(
+          "Gemini nu a returnat un răspuns."
+        );
       }
 
       const result = JSON.parse(response.text);
@@ -295,7 +687,9 @@ async function generateWithModel(model, parts) {
         !Array.isArray(result.keyPoints) ||
         !Array.isArray(result.quiz)
       ) {
-        throw new Error("Răspunsul Gemini are un format invalid.");
+        throw new Error(
+          "Răspunsul Gemini are un format invalid."
+        );
       }
 
       if (
@@ -306,11 +700,11 @@ async function generateWithModel(model, parts) {
             question.options.length !== 4 ||
             !Number.isInteger(question.correctAnswer) ||
             question.correctAnswer < 0 ||
-            question.correctAnswer > 3,
+            question.correctAnswer > 3
         )
       ) {
         throw new Error(
-          "Gemini nu a generat un quiz valid cu 5 întrebări și 4 variante.",
+          "Gemini nu a generat un quiz valid cu 5 întrebări și 4 variante."
         );
       }
 
@@ -320,16 +714,24 @@ async function generateWithModel(model, parts) {
 
       console.error(
         `Eroare Gemini (${model}, încercarea ${attempt}/${maxAttempts}):`,
-        error?.message || error,
+        error?.message || error
       );
 
-      if (!isTemporaryError(error) || attempt === maxAttempts) {
+      if (
+        !isTemporaryError(error) ||
+        attempt === maxAttempts
+      ) {
         throw error;
       }
 
-      const delay = Math.min(2000 * Math.pow(2, attempt - 1), 16000);
+      const delay = Math.min(
+        2000 * Math.pow(2, attempt - 1),
+        16000
+      );
 
-      console.log(`Reîncercăm în ${delay / 1000} secunde...`);
+      console.log(
+        `Reîncercăm în ${delay / 1000} secunde...`
+      );
 
       await wait(delay);
     }
@@ -338,22 +740,36 @@ async function generateWithModel(model, parts) {
   throw lastError;
 }
 
-// --------------------------------------------------
+// =========================================================
 // GEMINI FALLBACK
-// --------------------------------------------------
+// =========================================================
 
 async function generateWithFallback(parts) {
-  const models = [...new Set([PRIMARY_MODEL, FALLBACK_MODEL])];
+  const models = [
+    ...new Set([
+      PRIMARY_MODEL,
+      FALLBACK_MODEL,
+    ]),
+  ];
 
   let lastError;
 
-  for (let index = 0; index < models.length; index++) {
+  for (
+    let index = 0;
+    index < models.length;
+    index++
+  ) {
     const model = models[index];
 
     try {
-      const result = await generateWithModel(model, parts);
+      const result = await generateWithModel(
+        model,
+        parts
+      );
 
-      console.log(`Material generat cu modelul ${model}`);
+      console.log(
+        `Material generat cu modelul ${model}`
+      );
 
       return result;
     } catch (error) {
@@ -361,26 +777,36 @@ async function generateWithFallback(parts) {
 
       const status = getErrorStatus(error);
 
-      console.error(`Modelul ${model} a eșuat. Status: ${status}`);
+      console.error(
+        `Modelul ${model} a eșuat. Status: ${status}`
+      );
 
       if (index === models.length - 1) {
         break;
       }
 
-      if (!isTemporaryError(error) && status !== 404) {
+      if (
+        !isTemporaryError(error) &&
+        status !== 404
+      ) {
         throw error;
       }
 
-      console.log(`Încercăm modelul secundar: ${models[index + 1]}`);
+      console.log(
+        `Încercăm modelul secundar: ${models[index + 1]}`
+      );
     }
   }
 
-  throw lastError || new Error("Toate modelele Gemini au eșuat.");
+  throw (
+    lastError ||
+    new Error("Toate modelele Gemini au eșuat.")
+  );
 }
 
-// --------------------------------------------------
+// =========================================================
 // STUDY MATERIAL GENERATION
-// --------------------------------------------------
+// =========================================================
 
 async function generateStudyMaterial(file) {
   const extension = file.originalname
@@ -498,37 +924,119 @@ Dacă textul sau fotografia este ilizibilă, menționează acest lucru.
       text: `Conținut PowerPoint:\n\n${text}`,
     });
   } else {
-    throw new Error("Format de fișier nesuportat.");
+    throw new Error(
+      "Format de fișier nesuportat."
+    );
   }
 
   return generateWithFallback(parts);
 }
 
-// --------------------------------------------------
-// AUTH0 USER SYNC + SOLANA WALLET
-// --------------------------------------------------
+// =========================================================
+// GET STUDY STATISTICS
+// =========================================================
 
-app.post("/api/auth/sync", requireAuth, async (req, res) => {
-  try {
-    const auth0Id = req.auth?.payload?.sub;
+app.get(
+  "/api/study/stats",
+  requireAuth,
+  async (req, res) => {
+    try {
+      const auth0Id = req.auth?.payload?.sub;
 
-    if (!auth0Id) {
-      return res.status(401).json({
-        error: "Nu am putut identifica utilizatorul Auth0.",
+      if (!auth0Id) {
+        return res.status(401).json({
+          error: "Utilizator neautentificat.",
+        });
+      }
+
+      const userResult = await pool.query(
+        `
+        SELECT id
+        FROM users
+        WHERE auth0_id = $1
+        LIMIT 1
+        `,
+        [auth0Id]
+      );
+
+      if (userResult.rows.length === 0) {
+        return res.json({
+          success: true,
+          stats: {
+            materials: 0,
+            quizzes: 0,
+          },
+        });
+      }
+
+      const userId = userResult.rows[0].id;
+
+      const statsResult = await pool.query(
+        `
+        SELECT
+          (
+            SELECT COUNT(*)
+            FROM study_materials
+            WHERE user_id = $1
+          ) AS materials,
+
+          (
+            SELECT COUNT(*)
+            FROM quizzes
+            WHERE user_id = $1
+          ) AS quizzes
+        `,
+        [userId]
+      );
+
+      return res.json({
+        success: true,
+        stats: {
+          materials: Number(statsResult.rows[0].materials),
+          quizzes: Number(statsResult.rows[0].quizzes),
+        },
+      });
+    } catch (error) {
+      console.error("Eroare la statisticile Study:", error);
+
+      return res.status(500).json({
+        error: "Nu am putut încărca statisticile.",
       });
     }
+  }
+);
 
-    const email = req.auth?.payload?.email || req.body?.email || null;
+// =========================================================
+// AUTH0 USER SYNC - TIGERDATA
+// =========================================================
 
-    const name =
-      req.auth?.payload?.name ||
-      req.auth?.payload?.nickname ||
-      req.body?.name ||
-      null;
+app.post(
+  "/api/auth/sync",
+  requireAuth,
+  async (req, res) => {
+    try {
+      const auth0Id = req.auth?.payload?.sub;
 
-    // SAVE / UPDATE USER
-    const userResult = await pool.query(
-      `
+      if (!auth0Id) {
+        return res.status(401).json({
+          error:
+            "Nu am putut identifica utilizatorul Auth0.",
+        });
+      }
+
+      const email =
+        req.auth?.payload?.email ||
+        req.body?.email ||
+        null;
+
+      const name =
+        req.auth?.payload?.name ||
+        req.auth?.payload?.nickname ||
+        req.body?.name ||
+        null;
+
+      const userResult = await pool.query(
+        `
         INSERT INTO users (auth0_id, email, name)
         VALUES ($1, $2, $3)
 
@@ -540,47 +1048,54 @@ app.post("/api/auth/sync", requireAuth, async (req, res) => {
 
         RETURNING id, auth0_id, email, name
         `,
-      [auth0Id, email, name],
-    );
+        [auth0Id, email, name]
+      );
 
-    const user = userResult.rows[0];
+      const user = userResult.rows[0];
 
-    console.log("Utilizator sincronizat cu TigerData:", user.id);
+      console.log(
+        "Utilizator sincronizat cu TigerData:",
+        user.id
+      );
 
-    // CREATE / RETRIEVE SOLANA WALLET
-    const walletAddress = await getOrCreateUserWallet(user.id);
+      // CREATE / RETRIEVE SOLANA WALLET
+      const walletAddress = await getOrCreateUserWallet(user.id);
 
-    // READ REAL PAW BALANCE FROM SOLANA
-    const pawBalance = await getPawBalance(walletAddress);
+      // READ REAL PAW BALANCE FROM SOLANA
+      const pawBalance = await getPawBalance(walletAddress);
 
-    console.log("Wallet Solana:", walletAddress);
+      console.log("Wallet Solana:", walletAddress);
+      console.log("Sold PAW:", pawBalance);
 
-    console.log("Sold PAW:", pawBalance);
+      return res.json({
+        success: true,
+        message: "Utilizator sincronizat cu TigerData!",
+        user: {
+          ...user,
+          solana_wallet_address: walletAddress,
+        },
+        wallet: {
+          address: walletAddress,
+          pawBalance,
+        },
+      });
+    } catch (error) {
+      console.error(
+        "Eroare la sincronizarea utilizatorului:",
+        error
+      );
 
-    return res.json({
-      success: true,
-      message: "Utilizator sincronizat cu TigerData!",
-      user: {
-        ...user,
-        solana_wallet_address: walletAddress,
-      },
-      wallet: {
-        address: walletAddress,
-        pawBalance,
-      },
-    });
-  } catch (error) {
-    console.error("Eroare la sincronizarea utilizatorului:", error);
-
-    return res.status(500).json({
-      error: "Nu am putut sincroniza utilizatorul sau wallet-ul Solana.",
-    });
+      return res.status(500).json({
+        error:
+          "Nu am putut sincroniza utilizatorul sau wallet-ul Solana.",
+      });
+    }
   }
-});
+);
 
-// --------------------------------------------------
+// =========================================================
 // SOLANA WALLET - GET BALANCE
-// --------------------------------------------------
+// =========================================================
 
 app.get("/api/wallet", requireAuth, async (req, res) => {
   try {
@@ -600,7 +1115,7 @@ app.get("/api/wallet", requireAuth, async (req, res) => {
         WHERE auth0_id = $1
         LIMIT 1
         `,
-      [auth0Id],
+      [auth0Id]
     );
 
     if (userResult.rows.length === 0) {
@@ -633,9 +1148,322 @@ app.get("/api/wallet", requireAuth, async (req, res) => {
   }
 });
 
-// --------------------------------------------------
+// =========================================================
+// ELEVENLABS – VOICE TUTOR
+// =========================================================
+
+app.get(
+  "/api/elevenlabs/conversation-token",
+  requireAuth,
+  async (req, res) => {
+    try {
+      if (!process.env.ELEVENLABS_API_KEY) {
+        return res.status(500).json({
+          error: "Lipsește ELEVENLABS_API_KEY din server/.env",
+        });
+      }
+
+      if (!process.env.ELEVENLABS_AGENT_ID) {
+        return res.status(500).json({
+          error: "Lipsește ELEVENLABS_AGENT_ID din server/.env",
+        });
+      }
+
+      const response = await fetch(
+        `https://api.elevenlabs.io/v1/convai/conversation/token?agent_id=${encodeURIComponent(
+          process.env.ELEVENLABS_AGENT_ID
+        )}`,
+        {
+          method: "GET",
+          headers: {
+            "xi-api-key": process.env.ELEVENLABS_API_KEY,
+          },
+        }
+      );
+
+      if (!response.ok) {
+        const errorText = await response.text();
+
+        console.error("ElevenLabs API error:", response.status, errorText);
+
+        return res.status(502).json({
+          error: "Nu am putut obține tokenul pentru conversația vocală.",
+        });
+      }
+
+      const data = await response.json();
+
+      return res.json({
+        token: data.token,
+      });
+    } catch (error) {
+      console.error("ElevenLabs error:", error);
+
+      return res.status(500).json({
+        error: "A apărut o eroare la conectarea cu ElevenLabs.",
+      });
+    }
+  }
+);
+
+// =========================================================
+// VOICE CONVERSATIONS – istoricul conversațiilor cu Laica
+// =========================================================
+// Tabelul se creează cu: node create-voice-conversations.js
+
+const VOICE_MAX_MESSAGES = 1000;
+const VOICE_MAX_MESSAGE_LENGTH = 10000;
+const VOICE_MAX_TITLE_LENGTH = 200;
+
+function cleanVoiceText(value, maxLength) {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const trimmed = value.trim();
+
+  return trimmed ? trimmed.slice(0, maxLength) : null;
+}
+
+function parseVoiceConversationId(value) {
+  const id = Number(value);
+
+  return Number.isInteger(id) && id > 0 ? id : null;
+}
+
+// GET – lista conversațiilor (fără mesajele complete)
+app.get(
+  "/api/voice/conversations",
+  requireAuth,
+  async (req, res, next) => {
+    try {
+      const userId = await getReadingUserId(req);
+
+      const result = await pool.query(
+        `SELECT
+          id,
+          title,
+          book_title AS "bookTitle",
+          duration_seconds AS "durationSeconds",
+          jsonb_array_length(messages) AS "messageCount",
+          COALESCE(
+            (SELECT m->>'text'
+             FROM jsonb_array_elements(messages) m
+             WHERE m->>'role' = 'user'
+             LIMIT 1),
+            messages->0->>'text'
+          ) AS preview,
+          COALESCE(started_at, created_at) AS "startedAt"
+         FROM voice_conversations
+         WHERE user_id = $1
+         ORDER BY created_at DESC
+         LIMIT 200`,
+        [userId]
+      );
+
+      res.json({
+        success: true,
+        conversations: result.rows,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// GET – o conversație completă
+app.get(
+  "/api/voice/conversations/:id",
+  requireAuth,
+  async (req, res, next) => {
+    try {
+      const conversationId = parseVoiceConversationId(req.params.id);
+
+      if (!conversationId) {
+        return res.status(400).json({
+          success: false,
+          error: "ID-ul conversației nu este valid.",
+        });
+      }
+
+      const userId = await getReadingUserId(req);
+
+      const result = await pool.query(
+        `SELECT
+          id,
+          title,
+          book_title AS "bookTitle",
+          duration_seconds AS "durationSeconds",
+          messages,
+          COALESCE(started_at, created_at) AS "startedAt"
+         FROM voice_conversations
+         WHERE id = $1 AND user_id = $2
+         LIMIT 1`,
+        [conversationId, userId]
+      );
+
+      if (result.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          error: "Conversația nu a fost găsită.",
+        });
+      }
+
+      res.json({
+        success: true,
+        conversation: result.rows[0],
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// POST – salvează o conversație după ce s-a încheiat
+app.post(
+  "/api/voice/conversations",
+  requireAuth,
+  async (req, res, next) => {
+    try {
+      const {
+        elevenlabsConversationId,
+        title,
+        bookTitle,
+        messages,
+        durationSeconds,
+        startedAt,
+      } = req.body || {};
+
+      if (
+        !Array.isArray(messages) ||
+        messages.length === 0 ||
+        messages.length > VOICE_MAX_MESSAGES
+      ) {
+        return res.status(400).json({
+          success: false,
+          error: "Conversația nu conține mesaje valide.",
+        });
+      }
+
+      const cleanMessages = [];
+
+      for (const message of messages) {
+        const role = message?.role;
+        const text = cleanVoiceText(
+          message?.text,
+          VOICE_MAX_MESSAGE_LENGTH
+        );
+
+        if ((role !== "user" && role !== "agent") || !text) {
+          return res.status(400).json({
+            success: false,
+            error: "Conversația conține mesaje invalide.",
+          });
+        }
+
+        const at = new Date(message.at);
+
+        cleanMessages.push({
+          role,
+          text,
+          at: Number.isNaN(at.getTime()) ? null : at.toISOString(),
+        });
+      }
+
+      const cleanBookTitle = cleanVoiceText(
+        bookTitle,
+        VOICE_MAX_TITLE_LENGTH
+      );
+
+      const cleanTitle =
+        cleanVoiceText(title, VOICE_MAX_TITLE_LENGTH) ||
+        (cleanBookTitle
+          ? `About ${cleanBookTitle}`
+          : "Chat with Laica");
+
+      const duration = Math.max(
+        0,
+        Math.min(24 * 60 * 60, Math.round(Number(durationSeconds) || 0))
+      );
+
+      const start = new Date(startedAt);
+
+      const userId = await getReadingUserId(req);
+
+      const result = await pool.query(
+        `INSERT INTO voice_conversations
+          (
+            user_id,
+            elevenlabs_conversation_id,
+            title,
+            book_title,
+            messages,
+            duration_seconds,
+            started_at
+          )
+         VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)
+         RETURNING id`,
+        [
+          userId,
+          cleanVoiceText(elevenlabsConversationId, 100),
+          cleanTitle,
+          cleanBookTitle,
+          JSON.stringify(cleanMessages),
+          duration,
+          Number.isNaN(start.getTime()) ? null : start.toISOString(),
+        ]
+      );
+
+      res.status(201).json({
+        success: true,
+        id: result.rows[0].id,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// DELETE – șterge o conversație salvată
+app.delete(
+  "/api/voice/conversations/:id",
+  requireAuth,
+  async (req, res, next) => {
+    try {
+      const conversationId = parseVoiceConversationId(req.params.id);
+
+      if (!conversationId) {
+        return res.status(400).json({
+          success: false,
+          error: "ID-ul conversației nu este valid.",
+        });
+      }
+
+      const userId = await getReadingUserId(req);
+
+      const result = await pool.query(
+        `DELETE FROM voice_conversations
+         WHERE id = $1 AND user_id = $2`,
+        [conversationId, userId]
+      );
+
+      if (result.rowCount === 0) {
+        return res.status(404).json({
+          success: false,
+          error: "Conversația nu a fost găsită.",
+        });
+      }
+
+      res.json({ success: true });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// =========================================================
 // ROOT
-// --------------------------------------------------
+// =========================================================
 
 app.get("/", (req, res) => {
   res.json({
@@ -643,9 +1471,9 @@ app.get("/", (req, res) => {
   });
 });
 
-// --------------------------------------------------
+// =========================================================
 // GENERATE STUDY MATERIAL
-// --------------------------------------------------
+// =========================================================
 
 app.post(
   "/api/study/generate",
@@ -660,30 +1488,34 @@ app.post(
         });
       }
 
-      console.log("Fișier primit:", req.file.originalname);
+      console.log(
+        "Fișier primit:",
+        req.file.originalname
+      );
 
-      // GEMINI
       const result = await generateStudyMaterial(req.file);
 
       console.log("Material generat cu succes!");
 
-      // AUTH0 USER
       const auth0Id = req.auth?.payload?.sub;
 
       if (!auth0Id) {
         return res.status(401).json({
-          error: "Nu am putut identifica utilizatorul Auth0.",
+          error:
+            "Nu am putut identifica utilizatorul Auth0.",
         });
       }
 
-      const email = req.auth?.payload?.email || null;
+      const email =
+        req.auth?.payload?.email || null;
 
       const name =
-        req.auth?.payload?.name || req.auth?.payload?.nickname || null;
+        req.auth?.payload?.name ||
+        req.auth?.payload?.nickname ||
+        null;
 
       console.log("Utilizator Auth0:", auth0Id);
 
-      // SAVE / UPDATE USER
       const userResult = await pool.query(
         `
         INSERT INTO users
@@ -699,14 +1531,19 @@ app.post(
 
         RETURNING id
         `,
-        [auth0Id, email, name],
+        [auth0Id, email, name]
       );
 
       const userId = userResult.rows[0].id;
 
       console.log("User Tiger Data ID:", userId);
 
-      // SAVE STUDY MATERIAL
+      const savedContent = JSON.stringify({
+        title: result.title,
+        summary: result.summary,
+        keyPoints: result.keyPoints,
+      });
+
       const materialResult = await pool.query(
         `
         INSERT INTO study_materials
@@ -721,14 +1558,18 @@ app.post(
 
         RETURNING id
         `,
-        [userId, req.file.originalname, req.file.mimetype, result.summary],
+        [
+          userId,
+          req.file.originalname,
+          req.file.mimetype,
+          savedContent,
+        ]
       );
 
       const materialId = materialResult.rows[0].id;
 
       console.log("Material Tiger Data ID:", materialId);
 
-      // SAVE QUIZ
       const quizResult = await pool.query(
         `
         INSERT INTO quizzes
@@ -743,21 +1584,28 @@ app.post(
 
         RETURNING id
         `,
-        [materialId, userId, result.title, JSON.stringify(result.quiz)],
+        [
+          materialId,
+          userId,
+          result.title,
+          JSON.stringify(result.quiz),
+        ]
       );
 
       const quizId = quizResult.rows[0].id;
 
       console.log("Quiz Tiger Data ID:", quizId);
 
-      // RESPONSE
       return res.json({
         ...result,
         materialId,
         quizId,
       });
     } catch (error) {
-      console.error("Eroare la generarea materialului:", error);
+      console.error(
+        "Eroare la generarea materialului:",
+        error
+      );
 
       const status = getErrorStatus(error);
       const temporary = isTemporaryError(error);
@@ -772,143 +1620,524 @@ app.post(
 
       if (status === 401 || status === 403) {
         return res.status(status).json({
-          error: "Nu ești autentificat sau token-ul Auth0 nu este valid.",
+          error:
+            "Nu ești autentificat sau token-ul Auth0 nu este valid.",
           code: "AUTHENTICATION_FAILED",
         });
       }
 
-      return res.status(status === 400 ? 400 : 500).json({
-        error: error.message || "A apărut o eroare la procesarea materialului.",
-        code: "GENERATION_FAILED",
-      });
+      return res
+        .status(status === 400 ? 400 : 500)
+        .json({
+          error:
+            error.message ||
+            "A apărut o eroare la procesarea materialului.",
+          code: "GENERATION_FAILED",
+        });
     }
-  },
+  }
 );
 
-// --------------------------------------------------
-// SAVE QUIZ RESULT
-// --------------------------------------------------
+// =========================================================
+// GENERATE ANOTHER QUIZ FOR AN EXISTING MATERIAL
+// =========================================================
 
-app.post("/api/study/quiz-results", requireAuth, async (req, res) => {
-  try {
-    const auth0Id = req.auth?.payload?.sub;
-    const { quizId, answers } = req.body;
+app.post(
+  "/api/study/materials/:materialId/quizzes",
+  requireAuth,
+  async (req, res) => {
+    try {
+      const auth0Id = req.auth?.payload?.sub;
+      const materialId = Number(req.params.materialId);
 
-    // VALIDATE INPUT
-    if (
-      !auth0Id ||
-      !Number.isInteger(Number(quizId)) ||
-      !Array.isArray(answers)
-    ) {
-      return res.status(400).json({
-        error: "Datele trimise pentru quiz sunt invalide.",
-      });
-    }
+      if (
+        !auth0Id ||
+        !Number.isInteger(materialId) ||
+        materialId <= 0
+      ) {
+        return res.status(400).json({
+          error: "Date invalide.",
+        });
+      }
 
-    // FIND AUTHENTICATED USER
-    const userResult = await pool.query(
-      `
+      // FIND USER
+      const userResult = await pool.query(
+        `
         SELECT id
         FROM users
         WHERE auth0_id = $1
         LIMIT 1
         `,
-      [auth0Id],
-    );
+        [auth0Id]
+      );
 
-    if (userResult.rows.length === 0) {
-      return res.status(404).json({
-        error: "Utilizatorul nu există în baza de date.",
-      });
-    }
+      if (userResult.rows.length === 0) {
+        return res.status(404).json({
+          error: "Utilizatorul nu există.",
+        });
+      }
 
-    const userId = userResult.rows[0].id;
+      const userId = userResult.rows[0].id;
 
-    // FIND QUIZ AND VERIFY OWNERSHIP
-    const quizResult = await pool.query(
-      `
-        SELECT id, questions
-        FROM quizzes
-        WHERE id = $1 AND user_id = $2
+      // FIND MATERIAL AND VERIFY OWNERSHIP
+      const materialResult = await pool.query(
+        `
+        SELECT
+          id,
+          file_name,
+          content_summary
+        FROM study_materials
+        WHERE id = $1
+          AND user_id = $2
         LIMIT 1
         `,
-      [Number(quizId), userId],
-    );
+        [materialId, userId]
+      );
 
-    if (quizResult.rows.length === 0) {
-      return res.status(404).json({
-        error: "Quizul nu a fost găsit.",
-      });
-    }
-
-    const questions = quizResult.rows[0].questions;
-
-    if (
-      !Array.isArray(questions) ||
-      questions.length === 0 ||
-      answers.length !== questions.length
-    ) {
-      return res.status(400).json({
-        error: "Numărul răspunsurilor nu corespunde quizului.",
-      });
-    }
-
-    // VALIDATE AND EVALUATE ANSWERS ON THE SERVER
-    const answeredIndexes = new Set();
-    let score = 0;
-
-    const evaluatedAnswers = [];
-
-    for (const answer of answers) {
-      const questionIndex = Number(answer.questionIndex);
-      const selectedAnswer = Number(answer.selectedAnswer);
-
-      if (
-        !Number.isInteger(questionIndex) ||
-        questionIndex < 0 ||
-        questionIndex >= questions.length ||
-        answeredIndexes.has(questionIndex)
-      ) {
-        return res.status(400).json({
-          error: "Există răspunsuri invalide sau duplicate.",
+      if (materialResult.rows.length === 0) {
+        return res.status(404).json({
+          error: "Materialul nu a fost găsit.",
         });
       }
 
-      const question = questions[questionIndex];
+      const material = materialResult.rows[0];
 
-      if (
-        !Number.isInteger(selectedAnswer) ||
-        selectedAnswer < 0 ||
-        selectedAnswer >= question.options.length
-      ) {
+      // READ SAVED SUMMARY
+      let savedContent = null;
+
+      try {
+        savedContent =
+          typeof material.content_summary === "string"
+            ? JSON.parse(material.content_summary)
+            : material.content_summary;
+      } catch {
+        savedContent = null;
+      }
+
+      const isStructuredContent =
+        savedContent &&
+        typeof savedContent === "object" &&
+        !Array.isArray(savedContent);
+
+      const summary = isStructuredContent
+        ? savedContent.summary || ""
+        : material.content_summary || "";
+
+      const keyPoints = Array.isArray(savedContent?.keyPoints)
+        ? savedContent.keyPoints
+        : [];
+
+      if (!summary && keyPoints.length === 0) {
         return res.status(400).json({
-          error: "O variantă selectată nu este validă.",
+          error:
+            "Materialul nu conține suficiente informații pentru generarea unui quiz nou.",
         });
       }
 
-      answeredIndexes.add(questionIndex);
+      // GENERATE QUIZ WITH GEMINI
+      const prompt = `
+Ești asistentul educațional al aplicației Paws & Pages.
 
-      const isCorrect = selectedAnswer === question.correctAnswer;
+Generează un quiz NOU, diferit de un test obișnuit, pe baza materialului de mai jos.
 
-      if (isCorrect) {
-        score++;
-      }
+Titlul materialului:
+${savedContent?.title || material.file_name}
 
-      evaluatedAnswers.push({
-        questionIndex,
-        selectedAnswer,
-        correctAnswer: question.correctAnswer,
-        isCorrect,
-      });
-    }
+Rezumat:
+${summary}
 
-    // SAVE RESULT IN TIGERDATA
-    const savedResult = await pool.query(
-      `
-        INSERT INTO quiz_results
-          (quiz_id, user_id, score, total_questions, answers, completed_at)
+Concepte importante:
+${keyPoints
+  .map((point, index) => `${index + 1}. ${point}`)
+  .join("\n")}
+
+Cerințe:
+- Generează EXACT 5 întrebări.
+- Fiecare întrebare trebuie să aibă EXACT 4 variante.
+- O singură variantă trebuie să fie corectă.
+- correctAnswer trebuie să fie indexul variantei corecte, de la 0 la 3.
+- Include o explicație pentru fiecare răspuns.
+- Întrebările trebuie să fie diferite și să testeze înțelegerea, nu doar memorarea.
+- Nu inventa informații.
+- Scrie în limba română.
+
+Răspunsul trebuie să conțină:
+- title: titlul materialului;
+- summary: un rezumat scurt;
+- keyPoints: conceptele importante;
+- quiz: cele 5 întrebări generate.
+`;
+
+      const result = await generateWithFallback([
+        {
+          text: prompt,
+        },
+      ]);
+
+      // COUNT EXISTING QUIZZES
+      const countResult = await pool.query(
+        `
+        SELECT COUNT(*) AS total
+        FROM quizzes
+        WHERE material_id = $1
+          AND user_id = $2
+        `,
+        [materialId, userId]
+      );
+
+      const quizNumber =
+        Number(countResult.rows[0].total) + 1;
+
+      const quizTitle = `Quiz ${quizNumber} - ${
+        savedContent?.title || material.file_name
+      }`;
+
+      // SAVE NEW QUIZ
+      const quizResult = await pool.query(
+        `
+        INSERT INTO quizzes
+          (
+            material_id,
+            user_id,
+            title,
+            questions
+          )
         VALUES
-          ($1, $2, $3, $4, $5::jsonb, NOW())
+          ($1, $2, $3, $4)
+        RETURNING id, title, questions, created_at
+        `,
+        [
+          materialId,
+          userId,
+          quizTitle,
+          JSON.stringify(result.quiz),
+        ]
+      );
+
+      const newQuiz = quizResult.rows[0];
+
+      console.log("Quiz nou salvat:", newQuiz.id);
+
+      return res.status(201).json({
+        success: true,
+        message: "Quizul nou a fost generat!",
+        quiz: {
+          id: newQuiz.id,
+          title: newQuiz.title,
+          questions: newQuiz.questions,
+          createdAt: newQuiz.created_at,
+        },
+      });
+    } catch (error) {
+      console.error(
+        "Eroare la generarea unui quiz nou:",
+        error
+      );
+
+      if (isTemporaryError(error)) {
+        return res.status(503).json({
+          error:
+            "Gemini este momentan indisponibil. Încearcă din nou peste puțin timp.",
+        });
+      }
+
+      return res.status(500).json({
+        error:
+          error.message ||
+          "Nu am putut genera un quiz nou.",
+      });
+    }
+  }
+);
+
+// =========================================================
+// GET STUDY MATERIAL HISTORY
+// =========================================================
+
+app.get(
+  "/api/study/materials",
+  requireAuth,
+  async (req, res) => {
+    try {
+      const auth0Id = req.auth?.payload?.sub;
+
+      if (!auth0Id) {
+        return res.status(401).json({
+          error: "Nu am putut identifica utilizatorul Auth0.",
+        });
+      }
+
+      const userResult = await pool.query(
+        `
+        SELECT id
+        FROM users
+        WHERE auth0_id = $1
+        LIMIT 1
+        `,
+        [auth0Id]
+      );
+
+      if (userResult.rows.length === 0) {
+        return res.json({
+          success: true,
+          materials: [],
+        });
+      }
+
+      const userId = userResult.rows[0].id;
+
+      const materialsResult = await pool.query(
+        `
+        SELECT
+          sm.id,
+          sm.file_name,
+          sm.file_type,
+          sm.content_summary,
+          q.id AS quiz_id,
+          q.title AS quiz_title,
+          q.questions,
+          q.created_at AS quiz_created_at
+
+        FROM study_materials sm
+
+        LEFT JOIN quizzes q
+          ON q.material_id = sm.id
+          AND q.user_id = sm.user_id
+
+        WHERE sm.user_id = $1
+
+        ORDER BY sm.id DESC, q.created_at ASC
+        `,
+        [userId]
+      );
+
+      const materialsMap = new Map();
+
+      for (const row of materialsResult.rows) {
+        let savedContent = null;
+
+        try {
+          savedContent = JSON.parse(row.content_summary);
+        } catch {
+          savedContent = null;
+        }
+
+        if (!materialsMap.has(row.id)) {
+          materialsMap.set(row.id, {
+            id: row.id,
+            fileName: row.file_name,
+            fileType: row.file_type,
+
+            title:
+              savedContent?.title ||
+              row.file_name,
+
+            summary:
+              savedContent?.summary ||
+              row.content_summary ||
+              "",
+
+            keyPoints:
+              savedContent?.keyPoints || [],
+
+            quizzes: [],
+          });
+        }
+
+        const material = materialsMap.get(row.id);
+
+        if (row.quiz_id !== null) {
+          material.quizzes.push({
+            id: row.quiz_id,
+            materialId: row.id,
+            title: row.quiz_title || "Quiz",
+            questions: Array.isArray(row.questions)
+              ? row.questions
+              : [],
+            createdAt: row.quiz_created_at,
+          });
+        }
+      }
+
+      return res.json({
+        success: true,
+        materials: Array.from(materialsMap.values()),
+      });
+    } catch (error) {
+      console.error(
+        "Eroare la încărcarea istoricului:",
+        error
+      );
+
+      return res.status(500).json({
+        error: "Nu am putut încărca istoricul materialelor.",
+      });
+    }
+  }
+);
+
+// =========================================================
+// SAVE QUIZ RESULT
+// =========================================================
+
+app.post(
+  "/api/study/quiz-results",
+  requireAuth,
+  async (req, res) => {
+    try {
+      const auth0Id = req.auth?.payload?.sub;
+
+      const {
+        quizId,
+        answers,
+      } = req.body || {};
+
+      // VALIDATE INPUT
+      if (
+        !auth0Id ||
+        !Number.isInteger(Number(quizId)) ||
+        !Array.isArray(answers)
+      ) {
+        return res.status(400).json({
+          error:
+            "Datele trimise pentru quiz sunt invalide.",
+        });
+      }
+
+      // FIND AUTHENTICATED USER
+      const userResult = await pool.query(
+        `
+        SELECT id
+        FROM users
+        WHERE auth0_id = $1
+        LIMIT 1
+        `,
+        [auth0Id]
+      );
+
+      if (userResult.rows.length === 0) {
+        return res.status(404).json({
+          error:
+            "Utilizatorul nu există în baza de date.",
+        });
+      }
+
+      const userId = userResult.rows[0].id;
+
+      // FIND QUIZ + VERIFY OWNERSHIP
+      const quizResult = await pool.query(
+        `
+        SELECT id, questions
+        FROM quizzes
+        WHERE id = $1
+          AND user_id = $2
+        LIMIT 1
+        `,
+        [
+          Number(quizId),
+          userId,
+        ]
+      );
+
+      if (quizResult.rows.length === 0) {
+        return res.status(404).json({
+          error: "Quizul nu a fost găsit.",
+        });
+      }
+
+      const questions = quizResult.rows[0].questions;
+
+      if (
+        !Array.isArray(questions) ||
+        questions.length === 0 ||
+        answers.length !== questions.length
+      ) {
+        return res.status(400).json({
+          error:
+            "Numărul răspunsurilor nu corespunde quizului.",
+        });
+      }
+
+      // VALIDATE + EVALUATE ANSWERS
+      const answeredIndexes = new Set();
+
+      let score = 0;
+
+      const evaluatedAnswers = [];
+
+      for (const answer of answers) {
+        const questionIndex = Number(
+          answer.questionIndex
+        );
+
+        const selectedAnswer = Number(
+          answer.selectedAnswer
+        );
+
+        if (
+          !Number.isInteger(questionIndex) ||
+          questionIndex < 0 ||
+          questionIndex >= questions.length ||
+          answeredIndexes.has(questionIndex)
+        ) {
+          return res.status(400).json({
+            error:
+              "Există răspunsuri invalide sau duplicate.",
+          });
+        }
+
+        const question = questions[questionIndex];
+
+        if (
+          !Number.isInteger(selectedAnswer) ||
+          selectedAnswer < 0 ||
+          selectedAnswer >= question.options.length
+        ) {
+          return res.status(400).json({
+            error:
+              "O variantă selectată nu este validă.",
+          });
+        }
+
+        answeredIndexes.add(questionIndex);
+
+        const isCorrect =
+          selectedAnswer === question.correctAnswer;
+
+        if (isCorrect) {
+          score++;
+        }
+
+        evaluatedAnswers.push({
+          questionIndex,
+          selectedAnswer,
+          correctAnswer: question.correctAnswer,
+          isCorrect,
+        });
+      }
+
+      // SAVE RESULT IN TIGERDATA
+      const savedResult = await pool.query(
+        `
+        INSERT INTO quiz_results
+          (
+            quiz_id,
+            user_id,
+            score,
+            total_questions,
+            answers,
+            completed_at
+          )
+        VALUES
+          (
+            $1,
+            $2,
+            $3,
+            $4,
+            $5::jsonb,
+            NOW()
+          )
+
         RETURNING
           id,
           quiz_id,
@@ -918,55 +2147,86 @@ app.post("/api/study/quiz-results", requireAuth, async (req, res) => {
           answers,
           completed_at
         `,
-      [
-        Number(quizId),
-        userId,
-        score,
-        questions.length,
-        JSON.stringify(evaluatedAnswers),
-      ],
-    );
+        [
+          Number(quizId),
+          userId,
+          score,
+          questions.length,
+          JSON.stringify(evaluatedAnswers),
+        ]
+      );
 
-    console.log("Rezultat quiz salvat în TigerData:", savedResult.rows[0].id);
+      console.log(
+        "Rezultat quiz salvat în TigerData:",
+        savedResult.rows[0].id
+      );
 
-    return res.status(201).json({
-      success: true,
-      message: "Rezultatul quizului a fost salvat!",
-      result: savedResult.rows[0],
-    });
-  } catch (error) {
-    console.error("Eroare la salvarea rezultatului quizului:", error);
+      return res.status(201).json({
+        success: true,
+        message: "Rezultatul quizului a fost salvat!",
+        result: savedResult.rows[0],
+      });
+    } catch (error) {
+      console.error(
+        "Eroare la salvarea rezultatului quizului:",
+        error
+      );
 
-    return res.status(500).json({
-      error: "Nu am putut salva rezultatul quizului.",
+      return res.status(500).json({
+        error:
+          "Nu am putut salva rezultatul quizului.",
+      });
+    }
+  }
+);
+
+// =========================================================
+// ERROR HANDLER
+// =========================================================
+
+app.use(
+  (error, req, res, next) => {
+    console.error("Server error:", error);
+
+    if (res.headersSent) {
+      return next(error);
+    }
+
+    res.status(error.status || 500).json({
+      success: false,
+      error:
+        error.message ||
+        "A apărut o eroare pe server.",
     });
   }
-});
+);
 
-// --------------------------------------------------
-// UPLOAD ERROR HANDLER
-// --------------------------------------------------
-
-app.use((error, req, res, next) => {
-  console.error("Upload error:", error);
-
-  res.status(400).json({
-    error: error.message || "Eroare la încărcarea fișierului.",
-  });
-});
-
-// --------------------------------------------------
+// =========================================================
 // START SERVER
-// --------------------------------------------------
+// =========================================================
 
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Paws & Pages API running on port ${PORT}`);
+app.listen(
+  PORT,
+  "0.0.0.0",
+  () => {
+    console.log(
+      `Paws & Pages API running on port ${PORT}`
+    );
 
-  console.log(`Model principal: ${PRIMARY_MODEL}`);
+    console.log(
+      `Model principal: ${PRIMARY_MODEL}`
+    );
 
-  console.log(`Model secundar: ${FALLBACK_MODEL}`);
+    console.log(
+      `Model secundar: ${FALLBACK_MODEL}`
+    );
 
-  console.log(`Auth0 domain: ${process.env.AUTH0_DOMAIN}`);
+    console.log(
+      `Auth0 domain: ${process.env.AUTH0_DOMAIN}`
+    );
 
-  console.log(`Auth0 audience: ${process.env.AUTH0_AUDIENCE}`);
-});
+    console.log(
+      `Auth0 audience: ${process.env.AUTH0_AUDIENCE}`
+    );
+  }
+);

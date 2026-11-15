@@ -1,23 +1,29 @@
-import { router } from "expo-router";
+import { useFocusEffect } from "expo-router";
 import {
-  ArrowLeft,
-  Check,
-  Coins,
-  Palette,
-  ShoppingBag,
-  Sparkles,
+    ArrowLeft,
+    Check,
+    Coins,
+    Lock,
+    Palette,
+    RefreshCw,
+    ShoppingBag,
+    Sparkles,
 } from "lucide-react-native";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import {
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  useWindowDimensions,
-  View,
+    ActivityIndicator,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Text,
+    useWindowDimensions,
+    View,
 } from "react-native";
-import { useAuth0 } from "react-native-auth0";
 
+import { Notice, StateCard } from "@/components/ui/feedback";
+import { getErrorMessage, useApi } from "@/lib/api";
+import { confirmAction } from "@/lib/feedback";
+import { goBack } from "@/lib/navigation";
 import { AnimatedMascot } from "../components/AnimatedMascot";
 import { usePawWallet } from "../hooks/usePawWallet";
 
@@ -38,22 +44,21 @@ const COLORS = {
   border: "#E9DDEA",
 };
 
-const API_URL = "http://localhost:3001";
-const API_AUDIENCE = "https://paws-and-pages-api";
-const AUTH_SCOPE = "openid profile email offline_access";
-
 // --------------------------------------------------
 // TYPES
 // --------------------------------------------------
 
-type Skin = {
+type SkinVisual = {
+  background: string;
+  accent: string;
+  decoration: string;
+};
+
+type Skin = SkinVisual & {
   id: string;
   name: string;
   description: string;
   price: number;
-  background: string;
-  accent: string;
-  decoration: string;
 };
 
 type ShopSkin = Skin & {
@@ -68,6 +73,11 @@ type ShopApiItem = {
   price: number | string;
   owned: boolean;
   equipped: boolean;
+};
+
+type ShopNotice = {
+  tone: "success" | "error" | "info";
+  message: string;
 };
 
 // --------------------------------------------------
@@ -122,6 +132,21 @@ const SKINS: Skin[] = [
   },
 ];
 
+// Used when the backend returns a skin this app version has no artwork for,
+// so one new item never breaks the whole shop.
+const FALLBACK_VISUAL: SkinVisual = {
+  background: "#F5ECFA",
+  accent: "#D6B8E5",
+  decoration: "#B78DCC",
+};
+
+// One key per purchase attempt, so the backend can safely deduplicate retries.
+function createIdempotencyKey(itemId: string) {
+  return `shop_${itemId}_${Date.now()}_${Math.random()
+    .toString(36)
+    .slice(2, 10)}`;
+}
+
 // --------------------------------------------------
 // SHOP SCREEN
 // --------------------------------------------------
@@ -131,34 +156,25 @@ export default function ShopScreen() {
   const isWide = width >= 900;
   const isTablet = width >= 600;
 
-  const { getCredentials } = useAuth0();
+  const { fetchRaw } = useApi();
 
-  const { balance, loading: walletLoading, refreshWallet } = usePawWallet();
+  const {
+    balance,
+    loading: walletLoading,
+    error: walletError,
+    refreshWallet,
+  } = usePawWallet();
 
   const displayedBalance = walletLoading ? "..." : (balance ?? "—");
+  const numericBalance =
+    !walletLoading && balance !== null ? Number(balance) : null;
 
   const [skins, setSkins] = useState<ShopSkin[]>([]);
   const [shopLoading, setShopLoading] = useState(true);
+  const [shopError, setShopError] = useState<string | null>(null);
   const [busyItemId, setBusyItemId] = useState<string | null>(null);
-  const [notice, setNotice] = useState("");
-
-  // ------------------------------------------------
-  // AUTHENTICATION
-  // ------------------------------------------------
-
-  const getAuthHeaders = useCallback(async () => {
-    const credentials = await getCredentials(AUTH_SCOPE, 0, {
-      audience: API_AUDIENCE,
-    });
-
-    if (!credentials.accessToken) {
-      throw new Error("Nu am putut obține tokenul Auth0.");
-    }
-
-    return {
-      Authorization: `Bearer ${credentials.accessToken}`,
-    };
-  }, [getCredentials]);
+  const [pendingItemIds, setPendingItemIds] = useState<string[]>([]);
+  const [notice, setNotice] = useState<ShopNotice | null>(null);
 
   // ------------------------------------------------
   // LOAD SHOP CATALOG AND INVENTORY
@@ -167,35 +183,30 @@ export default function ShopScreen() {
   const loadShop = useCallback(async () => {
     try {
       setShopLoading(true);
+      setShopError(null);
 
-      const headers = await getAuthHeaders();
+      const { ok, data } = await fetchRaw<{
+        success?: boolean;
+        error?: string;
+        items?: ShopApiItem[];
+      }>("/api/shop");
 
-      const response = await fetch(`${API_URL}/api/shop`, {
-        method: "GET",
-        headers,
-      });
-
-      const data = await response.json();
-
-      if (!response.ok || !data.success) {
-        throw new Error(data.error || "Nu am putut încărca magazinul.");
+      if (!ok || !data.success) {
+        throw new Error(data.error || "We couldn't load the shop.");
       }
 
       if (!Array.isArray(data.items)) {
-        throw new Error("Răspuns invalid primit de la magazin.");
+        throw new Error("The shop returned an unexpected response.");
       }
 
-      const apiItems: ShopApiItem[] = data.items;
-
-      const mappedSkins: ShopSkin[] = apiItems.map((item) => {
-        const visual = SKINS.find((skin) => skin.id === item.id);
-
-        if (!visual) {
-          throw new Error(`Lipsește configurația vizuală pentru ${item.id}.`);
-        }
+      const mappedSkins: ShopSkin[] = data.items.map((item) => {
+        const visual =
+          SKINS.find((skin) => skin.id === item.id) ?? FALLBACK_VISUAL;
 
         return {
-          ...visual,
+          background: visual.background,
+          accent: visual.accent,
+          decoration: visual.decoration,
           id: item.id,
           name: item.name,
           description: item.description ?? "",
@@ -206,22 +217,29 @@ export default function ShopScreen() {
       });
 
       setSkins(mappedSkins);
+
+      // A skin that now shows as owned is no longer pending.
+      setPendingItemIds((ids) =>
+        ids.filter((id) => !mappedSkins.some((s) => s.id === id && s.owned)),
+      );
     } catch (error) {
       console.error("Shop loading error:", error);
 
-      setNotice(
-        error instanceof Error
-          ? error.message
-          : "Nu am putut încărca magazinul.",
-      );
+      setShopError(getErrorMessage(error, "We couldn't load the shop."));
     } finally {
       setShopLoading(false);
     }
-  }, [getAuthHeaders]);
+  }, [fetchRaw]);
 
-  useEffect(() => {
-    loadShop();
-  }, [loadShop]);
+  useFocusEffect(
+    useCallback(() => {
+      loadShop();
+    }, [loadShop]),
+  );
+
+  const refreshAll = useCallback(async () => {
+    await Promise.all([loadShop(), refreshWallet()]);
+  }, [loadShop, refreshWallet]);
 
   // ------------------------------------------------
   // CURRENT SKIN AND COLLECTION
@@ -237,54 +255,73 @@ export default function ShopScreen() {
   // ------------------------------------------------
 
   const handleBuy = async (skin: ShopSkin) => {
-    if (busyItemId !== null) return;
+    if (busyItemId !== null || pendingItemIds.includes(skin.id)) return;
+
+    const confirmed = await confirmAction({
+      title: `Buy ${skin.name}?`,
+      message:
+        `This sends ${skin.price} PAW from your wallet to Laica's Shop in a Solana Devnet transaction. ` +
+        (numericBalance !== null
+          ? `Your balance after the purchase will be ${numericBalance - skin.price} PAW.`
+          : "We couldn't check your balance right now; the purchase fails safely if you don't have enough PAW."),
+      confirmText: `Buy for ${skin.price} PAW`,
+    });
+
+    if (!confirmed) return;
 
     try {
       setBusyItemId(skin.id);
-      setNotice("");
+      setNotice({
+        tone: "info",
+        message: `Sending your ${skin.price} PAW transaction to Solana. This can take a few seconds...`,
+      });
 
-      const headers = await getAuthHeaders();
+      const idempotencyKey = createIdempotencyKey(skin.id);
 
-      const idempotencyKey = `shop_${skin.id}_${Date.now()}_${Math.random()
-        .toString(36)
-        .slice(2, 10)}`;
-
-      const response = await fetch(`${API_URL}/api/shop/purchase`, {
+      const { ok, status, data } = await fetchRaw<{
+        success?: boolean;
+        error?: string;
+        pendingConfirmation?: boolean;
+      }>("/api/shop/purchase", {
         method: "POST",
-        headers: {
-          ...headers,
-          "Content-Type": "application/json",
-        },
         body: JSON.stringify({
           itemId: skin.id,
           idempotencyKey,
         }),
       });
 
-      const data = await response.json();
-
-      if (response.status === 202 || data.pendingConfirmation) {
-        setNotice(
-          "Tranzacția a fost trimisă către Solana, dar încă se verifică. Nu încerca să cumperi din nou acest skin.",
+      if (status === 202 || data.pendingConfirmation) {
+        setPendingItemIds((ids) =>
+          ids.includes(skin.id) ? ids : [...ids, skin.id],
         );
+        setNotice({
+          tone: "info",
+          message:
+            "Your transaction was sent to Solana and is still being confirmed. Please don't buy this skin again. Check the status in a moment.",
+        });
         return;
       }
 
-      if (!response.ok || !data.success) {
-        throw new Error(data.error || "Achiziția nu a putut fi efectuată.");
+      if (!ok || !data.success) {
+        throw new Error(data.error || "The purchase could not be completed.");
       }
 
-      await Promise.all([loadShop(), refreshWallet()]);
+      await refreshAll();
 
-      setNotice(`${skin.name} a fost achiziționat cu succes!`);
+      setNotice({
+        tone: "success",
+        message: `${skin.name} is now in your collection! Tap "Equip skin" to dress Laica up.`,
+      });
     } catch (error) {
       console.error("Shop purchase error:", error);
 
-      setNotice(
-        error instanceof Error
-          ? error.message
-          : "A apărut o eroare la achiziție.",
-      );
+      setNotice({
+        tone: "error",
+        message: getErrorMessage(error, "Something went wrong with the purchase."),
+      });
+
+      // The balance may have changed on-chain; never keep a stale number.
+      refreshWallet();
     } finally {
       setBusyItemId(null);
     }
@@ -299,38 +336,32 @@ export default function ShopScreen() {
 
     try {
       setBusyItemId(skin.id);
-      setNotice("");
+      setNotice(null);
 
-      const headers = await getAuthHeaders();
-
-      const response = await fetch(`${API_URL}/api/shop/equip`, {
-        method: "POST",
-        headers: {
-          ...headers,
-          "Content-Type": "application/json",
+      const { ok, data } = await fetchRaw<{ success?: boolean; error?: string }>(
+        "/api/shop/equip",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            itemId: skin.id,
+          }),
         },
-        body: JSON.stringify({
-          itemId: skin.id,
-        }),
-      });
+      );
 
-      const data = await response.json();
-
-      if (!response.ok || !data.success) {
-        throw new Error(data.error || "Nu am putut echipa acest skin.");
+      if (!ok || !data.success) {
+        throw new Error(data.error || "We couldn't equip this skin.");
       }
 
       await loadShop();
 
-      setNotice(`${skin.name} este acum echipat!`);
+      setNotice({ tone: "success", message: `${skin.name} is now equipped!` });
     } catch (error) {
       console.error("Shop equip error:", error);
 
-      setNotice(
-        error instanceof Error
-          ? error.message
-          : "A apărut o eroare la echipare.",
-      );
+      setNotice({
+        tone: "error",
+        message: getErrorMessage(error, "Something went wrong while equipping."),
+      });
     } finally {
       setBusyItemId(null);
     }
@@ -339,6 +370,82 @@ export default function ShopScreen() {
   // ------------------------------------------------
   // SKIN CARD
   // ------------------------------------------------
+
+  const renderBuyAction = (skin: ShopSkin) => {
+    const isBusy = busyItemId === skin.id;
+    const isPending = pendingItemIds.includes(skin.id);
+
+    if (skin.price <= 0) {
+      return (
+        <View style={[styles.skinAction, styles.skinActionMuted]}>
+          <Text style={styles.skinActionText}>Free default look</Text>
+        </View>
+      );
+    }
+
+    if (isPending) {
+      return (
+        <Pressable
+          onPress={refreshAll}
+          style={({ pressed }) => [
+            styles.skinAction,
+            styles.skinActionMuted,
+            pressed && styles.pressed,
+          ]}
+          accessibilityRole="button"
+          accessibilityLabel={`Check the status of your ${skin.name} purchase`}
+        >
+          <RefreshCw size={14} color={COLORS.text} />
+          <Text style={styles.skinActionText}>Confirming... check status</Text>
+        </Pressable>
+      );
+    }
+
+    const missing =
+      numericBalance !== null ? Math.max(skin.price - numericBalance, 0) : 0;
+    const cannotAfford = missing > 0;
+    const disabled = busyItemId !== null || cannotAfford;
+
+    return (
+      <Pressable
+        onPress={() => handleBuy(skin)}
+        disabled={disabled}
+        style={({ pressed }) => [
+          styles.skinAction,
+          styles.buyAction,
+          cannotAfford && styles.skinActionMuted,
+          pressed && !disabled && styles.pressed,
+          (isBusy || (disabled && !cannotAfford)) && styles.actionDisabled,
+        ]}
+        accessibilityRole="button"
+        accessibilityLabel={
+          cannotAfford
+            ? `${skin.name} costs ${skin.price} PAW. You need ${missing} more PAW.`
+            : `Buy ${skin.name} for ${skin.price} PAW`
+        }
+        accessibilityState={{ disabled, busy: isBusy }}
+      >
+        {isBusy ? (
+          <>
+            <ActivityIndicator size="small" color={COLORS.text} />
+            <Text style={styles.buyActionText}>Buying...</Text>
+          </>
+        ) : cannotAfford ? (
+          <>
+            <Lock size={14} color={COLORS.muted} />
+            <Text style={styles.skinActionMutedText}>
+              {skin.price} PAW · need {missing} more
+            </Text>
+          </>
+        ) : (
+          <>
+            <Coins size={15} color={COLORS.text} />
+            <Text style={styles.buyActionText}>Buy for {skin.price} PAW</Text>
+          </>
+        )}
+      </Pressable>
+    );
+  };
 
   const renderSkinCard = (skin: ShopSkin, isOwned: boolean) => {
     const isEquipped = skin.equipped;
@@ -381,17 +488,35 @@ export default function ShopScreen() {
             <Text style={styles.artworkLabelText}>LAICA STYLE</Text>
           </View>
 
-          {isEquipped && (
+          {isEquipped ? (
             <View style={styles.equippedBadge}>
               <Check size={12} color={COLORS.white} />
               <Text style={styles.equippedBadgeText}>EQUIPPED</Text>
             </View>
-          )}
+          ) : isOwned ? (
+            <View style={[styles.equippedBadge, styles.ownedBadge]}>
+              <Check size={12} color={COLORS.darkPink} />
+              <Text style={[styles.equippedBadgeText, styles.ownedBadgeText]}>
+                OWNED
+              </Text>
+            </View>
+          ) : skin.price > 0 ? (
+            <View style={[styles.equippedBadge, styles.priceBadge]}>
+              <Coins size={12} color={COLORS.text} />
+              <Text style={[styles.equippedBadgeText, styles.priceBadgeText]}>
+                {skin.price} PAW
+              </Text>
+            </View>
+          ) : null}
         </View>
 
         <View style={styles.skinInfo}>
-          <Text style={styles.skinName}>{skin.name}</Text>
-          <Text style={styles.skinDescription}>{skin.description}</Text>
+          <Text style={styles.skinName} numberOfLines={1}>
+            {skin.name}
+          </Text>
+          <Text style={styles.skinDescription} numberOfLines={2}>
+            {skin.description}
+          </Text>
 
           <View style={styles.skinCardFooter}>
             {isOwned ? (
@@ -402,11 +527,25 @@ export default function ShopScreen() {
                   styles.skinAction,
                   isEquipped && styles.skinActionEquipped,
                   pressed && !isEquipped && styles.pressed,
-                  isBusy && styles.pressed,
+                  !isEquipped && busyItemId !== null && styles.actionDisabled,
                 ]}
+                accessibilityRole="button"
+                accessibilityLabel={
+                  isEquipped
+                    ? `${skin.name} is equipped`
+                    : `Equip ${skin.name}`
+                }
+                accessibilityState={{
+                  disabled: isEquipped || busyItemId !== null,
+                  selected: isEquipped,
+                  busy: isBusy,
+                }}
               >
                 {isBusy ? (
-                  <Text style={styles.skinActionText}>Please wait...</Text>
+                  <>
+                    <ActivityIndicator size="small" color={COLORS.text} />
+                    <Text style={styles.skinActionText}>Equipping...</Text>
+                  </>
                 ) : isEquipped ? (
                   <>
                     <Check size={15} color={COLORS.white} />
@@ -417,25 +556,7 @@ export default function ShopScreen() {
                 )}
               </Pressable>
             ) : (
-              <Pressable
-                onPress={() => handleBuy(skin)}
-                disabled={busyItemId !== null}
-                style={({ pressed }) => [
-                  styles.skinAction,
-                  styles.buyAction,
-                  pressed && styles.pressed,
-                  isBusy && styles.pressed,
-                ]}
-              >
-                {isBusy ? (
-                  <Text style={styles.buyActionText}>Please wait...</Text>
-                ) : (
-                  <>
-                    <Coins size={15} color={COLORS.text} />
-                    <Text style={styles.buyActionText}>{skin.price}</Text>
-                  </>
-                )}
-              </Pressable>
+              renderBuyAction(skin)
             )}
           </View>
         </View>
@@ -459,24 +580,34 @@ export default function ShopScreen() {
           {/* HEADER */}
           <View style={styles.header}>
             <Pressable
-              onPress={() => router.back()}
+              onPress={() => goBack("/home")}
               style={({ pressed }) => [
                 styles.backButton,
                 pressed && styles.pressed,
               ]}
+              accessibilityRole="button"
+              accessibilityLabel="Go back"
             >
               <ArrowLeft size={19} color={COLORS.text} />
-              <Text style={styles.backButtonText}>Back</Text>
+              {isTablet && <Text style={styles.backButtonText}>Back</Text>}
             </Pressable>
 
             <View style={styles.headerTitle}>
-              <Text style={styles.headerTitleText}>Laica's Shop</Text>
-              <Text style={styles.headerSubtitle}>
+              <Text style={styles.headerTitleText}>Laica’s Shop</Text>
+              <Text style={styles.headerSubtitle} numberOfLines={1}>
                 A little world of possibilities
               </Text>
             </View>
 
-            <View style={styles.balancePill}>
+            <View
+              style={styles.balancePill}
+              accessible
+              accessibilityLabel={
+                walletError
+                  ? "PAW balance unavailable"
+                  : `PAW balance: ${displayedBalance}`
+              }
+            >
               <Coins size={17} color={COLORS.darkPink} />
               <Text style={styles.balanceText}>{displayedBalance}</Text>
               <Text style={styles.balanceLabel}>PAW</Text>
@@ -499,22 +630,23 @@ export default function ShopScreen() {
                 <Text style={styles.eyebrowText}>YOUR READING COMPANION</Text>
               </View>
 
-              <Text style={styles.heroTitle}>
+              <Text
+                style={[styles.heroTitle, !isTablet && styles.heroTitleCompact]}
+              >
                 Make Laica
                 {"\n"}
                 <Text style={styles.heroTitleAccent}>uniquely yours.</Text>
               </Text>
 
               <Text style={styles.heroDescription}>
-                Give your reading buddy a new look. Discover styles, collect
-                your favourites and make every reading session a little more
-                special.
+                Give your reading buddy a new look. Buy styles with your PAW
+                tokens, then equip the one you love most.
               </Text>
 
               <View style={styles.heroNote}>
                 <Palette size={16} color={COLORS.darkPink} />
                 <Text style={styles.heroNoteText}>
-                  Your style, your little companion.
+                  Purchases are real PAW transfers on Solana Devnet.
                 </Text>
               </View>
             </View>
@@ -533,13 +665,13 @@ export default function ShopScreen() {
               />
 
               <View style={styles.previewMascot}>
-                <AnimatedMascot animation="original" />
+                <AnimatedMascot animation="original" size={isTablet ? 300 : 240} />
               </View>
 
               <View style={styles.previewCaption}>
                 <View>
                   <Text style={styles.previewSmallText}>
-                    CURRENTLY SELECTED
+                    CURRENTLY EQUIPPED
                   </Text>
                   <Text style={styles.previewName}>{selectedSkin.name}</Text>
                 </View>
@@ -551,81 +683,121 @@ export default function ShopScreen() {
             </View>
           </View>
 
-          {/* NOTICE */}
-          {notice !== "" && (
-            <View style={styles.notice}>
-              <Sparkles size={16} color={COLORS.darkPink} />
-              <Text style={styles.noticeText}>{notice}</Text>
+          {/* WALLET ERROR */}
+          {walletError ? (
+            <Notice
+              tone="error"
+              title="We couldn't load your PAW balance"
+              message={walletError}
+              actionLabel="Try again"
+              onAction={refreshWallet}
+              style={styles.noticeSpacing}
+            />
+          ) : null}
 
-              <Pressable onPress={() => setNotice("")}>
-                <Text style={styles.noticeDismiss}>Dismiss</Text>
-              </Pressable>
-            </View>
+          {/* NOTICE */}
+          {notice && (
+            <Notice
+              tone={notice.tone}
+              message={notice.message}
+              onDismiss={busyItemId ? undefined : () => setNotice(null)}
+              actionLabel={pendingItemIds.length > 0 && notice.tone === "info" && !busyItemId ? "Check status" : undefined}
+              onAction={refreshAll}
+              style={styles.noticeSpacing}
+            />
           )}
 
-          {/* COLLECTION */}
-          <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <View>
-                <Text style={styles.sectionTitle}>My collection</Text>
-                <Text style={styles.sectionSubtitle}>
-                  The styles you've collected so far
-                </Text>
+          {shopLoading && skins.length === 0 ? (
+            <StateCard
+              loading
+              loadingText="Loading Laica's wardrobe..."
+              style={styles.section}
+            />
+          ) : shopError && skins.length === 0 ? (
+            <StateCard
+              error={shopError}
+              onRetry={loadShop}
+              style={styles.section}
+            />
+          ) : (
+            <>
+              {shopError ? (
+                <Notice
+                  tone="error"
+                  message={shopError}
+                  actionLabel="Try again"
+                  onAction={loadShop}
+                  style={styles.noticeSpacing}
+                />
+              ) : null}
+
+              {/* COLLECTION */}
+              <View style={styles.section}>
+                <View style={styles.sectionHeader}>
+                  <View style={styles.sectionHeading}>
+                    <Text style={styles.sectionTitle}>My collection</Text>
+                    <Text style={styles.sectionSubtitle}>
+                      Skins you own. Equip one to change Laica’s look.
+                    </Text>
+                  </View>
+
+                  <View style={styles.countPill}>
+                    <Text style={styles.countText}>
+                      {ownedSkins.length}{" "}
+                      {ownedSkins.length === 1 ? "skin" : "skins"}
+                    </Text>
+                  </View>
+                </View>
+
+                {ownedSkins.length > 0 ? (
+                  <View style={styles.skinGrid}>
+                    {ownedSkins.map((skin) => renderSkinCard(skin, true))}
+                  </View>
+                ) : (
+                  <View style={styles.emptyCollection}>
+                    <Palette size={25} color={COLORS.darkPink} />
+                    <Text style={styles.emptyTitle}>No skins yet</Text>
+                    <Text style={styles.emptyDescription}>
+                      Pick a style below to start Laica’s wardrobe.
+                    </Text>
+                  </View>
+                )}
               </View>
 
-              <View style={styles.countPill}>
-                <Text style={styles.countText}>
-                  {ownedSkins.length}{" "}
-                  {ownedSkins.length === 1 ? "skin" : "skins"}
-                </Text>
-              </View>
-            </View>
+              {/* DISCOVER */}
+              <View style={styles.section}>
+                <View style={styles.sectionHeader}>
+                  <View style={styles.sectionHeading}>
+                    <Text style={styles.sectionTitle}>Discover</Text>
+                    <Text style={styles.sectionSubtitle}>
+                      Find something new for Laica
+                    </Text>
+                  </View>
 
-            {shopLoading ? (
-              <Text style={styles.sectionSubtitle}>
-                Loading your collection...
-              </Text>
-            ) : (
-              <View style={styles.skinGrid}>
-                {ownedSkins.map((skin) => renderSkinCard(skin, true))}
-              </View>
-            )}
-          </View>
+                  <View style={styles.discoverPill}>
+                    <ShoppingBag size={14} color={COLORS.darkPink} />
+                    <Text style={styles.discoverPillText}>THE SHOP</Text>
+                  </View>
+                </View>
 
-          {/* DISCOVER */}
-          <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <View>
-                <Text style={styles.sectionTitle}>Discover</Text>
-                <Text style={styles.sectionSubtitle}>
-                  Find something new for Laica
-                </Text>
+                {discoverSkins.length > 0 ? (
+                  <View style={styles.skinGrid}>
+                    {discoverSkins.map((skin) => renderSkinCard(skin, false))}
+                  </View>
+                ) : (
+                  <View style={styles.emptyCollection}>
+                    <Sparkles size={25} color={COLORS.darkPink} />
+                    <Text style={styles.emptyTitle}>
+                      You’ve found them all!
+                    </Text>
+                    <Text style={styles.emptyDescription}>
+                      New styles will be waiting for you soon.
+                    </Text>
+                  </View>
+                )}
               </View>
-
-              <View style={styles.discoverPill}>
-                <ShoppingBag size={14} color={COLORS.darkPink} />
-                <Text style={styles.discoverPillText}>THE SHOP</Text>
-              </View>
-            </View>
-
-            {shopLoading ? (
-              <Text style={styles.sectionSubtitle}>
-                Loading available skins...
-              </Text>
-            ) : discoverSkins.length > 0 ? (
-              <View style={styles.skinGrid}>
-                {discoverSkins.map((skin) => renderSkinCard(skin, false))}
-              </View>
-            ) : (
-              <View style={styles.emptyCollection}>
-                <Sparkles size={25} color={COLORS.darkPink} />
-                <Text style={styles.emptyTitle}>You've found them all!</Text>
-                <Text style={styles.emptyDescription}>
-                  New styles will be waiting for you soon.
-                </Text>
-              </View>
-            )}
-          </View>
+            </>
+          )}
 
           {/* TOKEN INFO */}
           <View style={styles.tokenCard}>
@@ -636,8 +808,8 @@ export default function ShopScreen() {
             <View style={styles.tokenInfo}>
               <Text style={styles.tokenTitle}>Your Paw Tokens</Text>
               <Text style={styles.tokenDescription}>
-                Keep reading, completing quests and earning rewards to unlock
-                more styles.
+                Your balance is read live from your Solana Devnet wallet.
+                Earning PAW from quests is not available yet.
               </Text>
             </View>
 
@@ -687,6 +859,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
+    minHeight: 44,
     paddingVertical: 12,
     paddingHorizontal: 15,
     backgroundColor: COLORS.white,
@@ -771,6 +944,10 @@ const styles = StyleSheet.create({
     lineHeight: 47,
     fontFamily: "PlayfairDisplay_700Bold",
   },
+  heroTitleCompact: {
+    fontSize: 30,
+    lineHeight: 37,
+  },
   heroTitleAccent: {
     color: COLORS.darkPink,
   },
@@ -789,6 +966,7 @@ const styles = StyleSheet.create({
     marginTop: 22,
   },
   heroNoteText: {
+    flexShrink: 1,
     color: COLORS.text,
     fontSize: 12,
     fontFamily: "Nunito_700Bold",
@@ -811,7 +989,8 @@ const styles = StyleSheet.create({
     top: 10,
   },
   previewMascot: {
-    width: 300,
+    width: "100%",
+    maxWidth: 300,
     height: 255,
     alignItems: "center",
     justifyContent: "center",
@@ -851,27 +1030,8 @@ const styles = StyleSheet.create({
   },
 
   // NOTICE
-  notice: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    backgroundColor: "#FFF4F5",
-    borderWidth: 1,
-    borderColor: COLORS.pink,
-    borderRadius: 15,
-    padding: 14,
+  noticeSpacing: {
     marginBottom: 25,
-  },
-  noticeText: {
-    flex: 1,
-    color: COLORS.text,
-    fontSize: 12,
-    fontFamily: "Nunito_700Bold",
-  },
-  noticeDismiss: {
-    color: COLORS.darkPink,
-    fontSize: 11,
-    fontFamily: "Nunito_800ExtraBold",
   },
 
   // SECTIONS
@@ -883,6 +1043,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     marginBottom: 17,
+    gap: 12,
+  },
+  sectionHeading: {
+    flex: 1,
   },
   sectionTitle: {
     color: COLORS.text,
@@ -996,6 +1160,18 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
     fontFamily: "Nunito_800ExtraBold",
   },
+  ownedBadge: {
+    backgroundColor: COLORS.white,
+  },
+  ownedBadgeText: {
+    color: COLORS.darkPink,
+  },
+  priceBadge: {
+    backgroundColor: "rgba(255,255,255,0.9)",
+  },
+  priceBadgeText: {
+    color: COLORS.text,
+  },
   skinInfo: {
     paddingHorizontal: 5,
     paddingTop: 13,
@@ -1016,7 +1192,7 @@ const styles = StyleSheet.create({
     marginTop: 15,
   },
   skinAction: {
-    minHeight: 39,
+    minHeight: 42,
     borderRadius: 12,
     backgroundColor: "#F9EEF6",
     flexDirection: "row",
@@ -1037,6 +1213,17 @@ const styles = StyleSheet.create({
     color: COLORS.white,
     fontSize: 12,
     fontFamily: "Nunito_800ExtraBold",
+  },
+  skinActionMuted: {
+    backgroundColor: "#F3EEF5",
+  },
+  skinActionMutedText: {
+    color: COLORS.muted,
+    fontSize: 12,
+    fontFamily: "Nunito_800ExtraBold",
+  },
+  actionDisabled: {
+    opacity: 0.55,
   },
   buyAction: {
     backgroundColor: COLORS.pink,
@@ -1071,6 +1258,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontFamily: "Nunito_400Regular",
     marginTop: 5,
+    textAlign: "center",
   },
 
   // TOKEN CARD

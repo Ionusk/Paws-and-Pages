@@ -1,395 +1,439 @@
-
-import React, { useMemo } from "react";
+import { router, useLocalSearchParams } from "expo-router";
 import {
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-  Pressable,
+    ArrowLeft,
+    BookOpen,
+    ChevronRight,
+    GraduationCap,
+    Sparkles,
+} from "lucide-react-native";
+import { useMemo } from "react";
+import {
+    Platform,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Text,
+    useWindowDimensions,
+    View,
 } from "react-native";
-import { useLocalSearchParams, router } from "expo-router";
+
+import { COMPACT_BREAKPOINT } from "@/constants/palette";
+import { goBack } from "@/lib/navigation";
+
+// Shape returned by POST /api/study/generate.
+type StudyMaterial = {
+  id?: number;
+  materialId?: number;
+  fileName?: string;
+  title?: string;
+  summary?: string;
+  keyPoints?: string[];
+  quizId?: number;
+  quiz?: any[];
+};
 
 export default function SummaryScreen() {
-  const { result } = useLocalSearchParams<{ result?: string }>();
+  const params = useLocalSearchParams();
+  const { width } = useWindowDimensions();
+  const isCompact = width < COMPACT_BREAKPOINT;
 
   const data = useMemo(() => {
+    if (!params.result) return null;
+
     try {
-      return result ? JSON.parse(result) : null;
-    } catch {
+      const rawResult = Array.isArray(params.result)
+        ? params.result[0]
+        : params.result;
+
+      return JSON.parse(rawResult) as StudyMaterial;
+    } catch (error) {
+      console.error("Could not read the summary result:", error);
       return null;
     }
-  }, [result]);
+  }, [params.result]);
+
+  const openQuiz = () => {
+    if (!data) return;
+
+    router.push({
+      pathname: "/study/quiz",
+      params: {
+        result: JSON.stringify(data),
+      },
+    });
+  };
 
   if (!data) {
     return (
-      <View style={styles.empty}>
-        <Text style={styles.emptyEmoji}>🐾</Text>
+      <View style={styles.container}>
+        <View style={[styles.header, isCompact && styles.compactPadding]}>
+          <Pressable
+            style={styles.backButton}
+            onPress={() => goBack("/study")}
+            accessibilityRole="button"
+            accessibilityLabel="Go back"
+          >
+            <ArrowLeft size={22} color="#51446B" />
+          </Pressable>
+          <Text style={styles.headerTitle}>AI Summary</Text>
+        </View>
 
-        <Text style={styles.emptyTitle}>
-          Your study corner is waiting
-        </Text>
-
-        <Text style={styles.text}>
-          Upload a document to create your own study notes.
-        </Text>
-
-        <Pressable
-          style={({ pressed }) => [
-            styles.button,
-            pressed && styles.buttonPressed,
-          ]}
-          onPress={() => router.push("/study/upload")}
-        >
-          <Text style={styles.buttonText}>Upload material  ✿</Text>
-        </Pressable>
+        <View style={[styles.emptyCard, isCompact && styles.emptyCardCompact]}>
+          <Sparkles size={32} color="#9B86C4" />
+          <Text style={styles.emptyTitle}>No summary available</Text>
+          <Text style={styles.emptyText}>
+            Upload a study material to generate your summary. Earlier
+            summaries are saved in AI summaries.
+          </Text>
+          <Pressable
+            style={styles.button}
+            onPress={() => router.push("/study/upload")}
+            accessibilityRole="button"
+          >
+            <Text style={styles.buttonText}>Upload material</Text>
+          </Pressable>
+          <Pressable
+            style={styles.linkButton}
+            onPress={() => router.push("/study/aisummary")}
+            accessibilityRole="button"
+          >
+            <Text style={styles.linkButtonText}>See saved summaries</Text>
+          </Pressable>
+        </View>
       </View>
     );
   }
 
   return (
-    <ScrollView
-      contentContainerStyle={styles.container}
-      showsVerticalScrollIndicator={false}
-    >
-      <Text style={styles.eyebrow}>
-        PAWS & PAGES  ✿  YOUR STUDY NOTES
-      </Text>
+    <SummaryContent data={data} openQuiz={openQuiz} isCompact={isCompact} />
+  );
+}
 
-      <Text style={styles.title}>{data.title}</Text>
+function SummaryContent({
+  data,
+  openQuiz,
+  isCompact,
+}: {
+  data: StudyMaterial;
+  openQuiz: () => void;
+  isCompact: boolean;
+}) {
+  const title = data.title || data.fileName || "Study Summary";
+  const summary = data.summary || "";
+  const keyPoints = Array.isArray(data.keyPoints) ? data.keyPoints : [];
+  // The quiz screen needs the questions array to render anything.
+  const hasQuiz = Array.isArray(data.quiz) && data.quiz.length > 0;
+  const horizontalPadding = isCompact ? styles.compactPadding : null;
 
-      <Text style={styles.subtitle}>
-        Your little collection of things worth remembering ♡
-      </Text>
-
-      <View style={styles.decorativeLine}>
-        <View style={styles.line} />
-        <Text style={styles.decorativeIcon}>✿</Text>
-        <View style={styles.line} />
-      </View>
-
-      <View style={styles.card}>
-        <View style={styles.sectionHeader}>
-          <View style={styles.iconCircle}>
-            <Text style={styles.sectionIcon}>📖</Text>
-          </View>
-
-          <View>
-            <Text style={styles.sectionTitle}>The summary</Text>
-            <Text style={styles.sectionSubtitle}>
-              THE BIG PICTURE
-            </Text>
-          </View>
-        </View>
-
-        <Text style={styles.body}>{data.summary}</Text>
-      </View>
-
-      <View style={styles.card}>
-        <View style={styles.sectionHeader}>
-          <View style={[styles.iconCircle, styles.sageCircle]}>
-            <Text style={styles.sectionIcon}>✧</Text>
-          </View>
-
-          <View>
-            <Text style={styles.sectionTitle}>Key concepts</Text>
-            <Text style={styles.sectionSubtitle}>
-              THINGS TO REMEMBER
-            </Text>
-          </View>
-        </View>
-
-        {data.keyPoints?.map((point: string, index: number) => (
-          <View style={styles.point} key={index}>
-            <View style={styles.pointNumber}>
-              <Text style={styles.pointNumberText}>
-                {String(index + 1).padStart(2, "0")}
-              </Text>
-            </View>
-
-            <Text style={styles.pointText}>{point}</Text>
-          </View>
-        ))}
-      </View>
-
-      <View style={styles.quizBanner}>
-        <Text style={styles.bannerDecoration}>✿  ♡  ✿</Text>
-
-        <Text style={styles.bannerTitle}>
-          Ready to test yourself?
-        </Text>
-
-        <Text style={styles.bannerText}>
-          See how much you've learned with a little practice.
-        </Text>
-
+  return (
+    <View style={styles.container}>
+      <View style={[styles.header, horizontalPadding]}>
         <Pressable
-          style={({ pressed }) => [
-            styles.button,
-            styles.quizButton,
-            pressed && styles.buttonPressed,
-          ]}
-          onPress={() =>
-            router.push({
-              pathname: "/study/quiz",
-              params: {
-                result: JSON.stringify(data),
-              },
-            } as any)
-          }
+          style={styles.backButton}
+          onPress={() => goBack("/study")}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
         >
-          <Text style={styles.buttonText}>
-            Take the quiz  ✧
-          </Text>
+          <ArrowLeft size={22} color="#51446B" />
         </Pressable>
+
+        <View style={styles.headerText}>
+          <Text style={styles.headerTitle}>AI Summary</Text>
+          <Text style={styles.headerSubtitle}>Learn a little every day</Text>
+        </View>
+
+        <View style={styles.headerIcon}>
+          <Sparkles size={23} color="#8D78B7" />
+        </View>
       </View>
 
-      <Text style={styles.footer}>
-        MADE WITH LOVE  ♡  PAWS & PAGES
-      </Text>
-    </ScrollView>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={[styles.content, horizontalPadding]}
+      >
+        <View style={styles.titleCard}>
+          <View style={styles.titleIcon}>
+            <GraduationCap size={27} color="#8D78B7" />
+          </View>
+          <Text style={styles.summaryTitle}>{title}</Text>
+          <Text style={styles.summarySubtitle}>
+            Your personalized study notes
+          </Text>
+        </View>
+
+        <View style={styles.card}>
+          <View style={styles.cardHeading}>
+            <BookOpen size={20} color="#8D78B7" />
+            <Text style={styles.cardTitle}>Summary</Text>
+          </View>
+          <Text style={styles.summaryText}>
+            {summary || "No summary available."}
+          </Text>
+        </View>
+
+        <View style={styles.card}>
+          <View style={styles.cardHeading}>
+            <Sparkles size={20} color="#8D78B7" />
+            <Text style={styles.cardTitle}>Key points</Text>
+          </View>
+
+          {keyPoints.length > 0 ? (
+            keyPoints.map((point, index) => (
+              <View key={index} style={styles.keyPointRow}>
+                <View style={styles.number}>
+                  <Text style={styles.numberText}>{index + 1}</Text>
+                </View>
+                <Text style={styles.keyPointText}>{point}</Text>
+              </View>
+            ))
+          ) : (
+            <Text style={styles.summaryText}>No key points available.</Text>
+          )}
+        </View>
+
+        {hasQuiz && (
+          <View style={styles.quizCard}>
+            <View style={styles.quizIcon}>
+              <GraduationCap size={25} color="#FFFFFF" />
+            </View>
+            <Text style={styles.quizTitle}>Ready to test yourself?</Text>
+            <Text style={styles.quizDescription}>
+              Practice what you have learned with a quick quiz.
+            </Text>
+            <Pressable
+              style={({ pressed }) => [
+                styles.quizButton,
+                pressed && styles.pressed,
+              ]}
+              onPress={openQuiz}
+              accessibilityRole="button"
+            >
+              <Text style={styles.quizButtonText}>Start quiz</Text>
+              <ChevronRight size={18} color="#79649F" />
+            </Pressable>
+          </View>
+        )}
+      </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
-    flexGrow: 1,
-    backgroundColor: "#FFF8F1",
+    flex: 1,
+    backgroundColor: "#F9F7FC",
+  },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
     paddingHorizontal: 22,
-    paddingTop: 58,
-    paddingBottom: 35,
+    paddingTop: Platform.OS === "web" ? 25 : 55,
+    paddingBottom: 20,
   },
-
-  empty: {
+  compactPadding: {
+    paddingHorizontal: 18,
+  },
+  headerText: {
     flex: 1,
-    backgroundColor: "#FFF8F1",
-    justifyContent: "center",
-    alignItems: "center",
-    padding: 28,
   },
-
-  emptyEmoji: {
-    fontSize: 38,
-    marginBottom: 15,
-  },
-
-  emptyTitle: {
-    color: "#59484C",
-    fontFamily: "PlayfairDisplay_700Bold",
-    fontSize: 25,
-    textAlign: "center",
-    marginBottom: 10,
-  },
-
-  eyebrow: {
-    color: "#A58B7C",
-    fontFamily: "Nunito_800ExtraBold",
-    fontSize: 10,
-    letterSpacing: 1.8,
-  },
-
-  title: {
-    color: "#59484C",
-    fontFamily: "PlayfairDisplay_700Bold",
-    fontSize: 30,
-    lineHeight: 39,
-    marginTop: 17,
-  },
-
-  subtitle: {
-    color: "#9B8588",
-    fontFamily: "Nunito_400Regular",
-    fontSize: 14,
-    lineHeight: 21,
-    marginTop: 8,
-    marginBottom: 18,
-  },
-
-  decorativeLine: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    marginBottom: 22,
-  },
-
-  line: {
-    flex: 1,
-    height: 1,
-    backgroundColor: "#EBD9E0",
-  },
-
-  decorativeIcon: {
-    color: "#C58F9C",
-    fontSize: 17,
-  },
-
-  card: {
-    backgroundColor: "#FFFFFF",
-    padding: 21,
-    borderRadius: 22,
-    marginBottom: 17,
-    borderWidth: 1,
-    borderColor: "#F0E4DA",
-    shadowColor: "#80675C",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.05,
-    shadowRadius: 9,
-    elevation: 2,
-  },
-
-  sectionHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 18,
-    gap: 12,
-  },
-
-  iconCircle: {
-    width: 43,
-    height: 43,
+  backButton: {
+    width: 42,
+    height: 42,
     borderRadius: 15,
-    backgroundColor: "#F4E8ED",
+    backgroundColor: "#FFFFFF",
     alignItems: "center",
     justifyContent: "center",
+    marginRight: 13,
   },
-
-  sageCircle: {
-    backgroundColor: "#EAF0E6",
+  headerTitle: {
+    fontSize: 21,
+    fontWeight: "700",
+    color: "#51446B",
   },
-
-  sectionIcon: {
-    fontSize: 19,
-    color: "#8E6872",
-  },
-
-  sectionTitle: {
-    color: "#59484C",
-    fontFamily: "PlayfairDisplay_700Bold",
-    fontSize: 20,
-  },
-
-  sectionSubtitle: {
-    color: "#B18E91",
-    fontFamily: "Nunito_800ExtraBold",
-    fontSize: 9,
-    letterSpacing: 1.4,
+  headerSubtitle: {
+    fontSize: 12,
+    color: "#A39AAF",
     marginTop: 3,
   },
-
-  body: {
-    color: "#78666A",
-    fontFamily: "Nunito_400Regular",
-    fontSize: 14,
-    lineHeight: 24,
-  },
-
-  point: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    marginBottom: 16,
-    gap: 12,
-  },
-
-  pointNumber: {
-    width: 27,
-    height: 27,
-    borderRadius: 10,
-    backgroundColor: "#F4E8ED",
+  headerIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 15,
+    backgroundColor: "#F0EAF8",
     alignItems: "center",
     justifyContent: "center",
-    marginTop: 1,
   },
-
-  pointNumberText: {
-    color: "#B77D88",
-    fontFamily: "Nunito_800ExtraBold",
-    fontSize: 10,
+  content: {
+    paddingHorizontal: 22,
+    paddingBottom: 45,
   },
-
-  pointText: {
-    flex: 1,
-    color: "#78666A",
-    fontFamily: "Nunito_600SemiBold",
-    fontSize: 14,
-    lineHeight: 22,
-  },
-
-  quizBanner: {
-    backgroundColor: "#F4E8ED",
-    padding: 23,
+  titleCard: {
+    backgroundColor: "#F0EAF8",
     borderRadius: 23,
+    padding: 22,
     alignItems: "center",
-    marginTop: 5,
-    marginBottom: 22,
-    borderWidth: 1,
-    borderColor: "#EBD9E0",
+    marginBottom: 19,
   },
-
-  bannerDecoration: {
-    color: "#B77D88",
-    fontSize: 19,
-    marginBottom: 10,
+  titleIcon: {
+    width: 55,
+    height: 55,
+    borderRadius: 18,
+    backgroundColor: "#FFFFFF",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 14,
   },
-
-  bannerTitle: {
-    color: "#59484C",
-    fontFamily: "PlayfairDisplay_700Bold",
-    fontSize: 22,
+  summaryTitle: {
+    fontSize: 21,
+    fontWeight: "700",
+    color: "#51446B",
+    textAlign: "center",
+    marginBottom: 7,
+  },
+  summarySubtitle: {
+    fontSize: 12,
+    color: "#8D819E",
     textAlign: "center",
   },
-
-  bannerText: {
-    color: "#8D777B",
-    fontFamily: "Nunito_400Regular",
+  card: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 21,
+    padding: 19,
+    marginBottom: 16,
+  },
+  cardHeading: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 15,
+    gap: 10,
+  },
+  cardTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#51446B",
+  },
+  summaryText: {
+    fontSize: 14,
+    lineHeight: 23,
+    color: "#746B80",
+  },
+  keyPointRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    marginBottom: 14,
+  },
+  number: {
+    width: 25,
+    height: 25,
+    borderRadius: 9,
+    backgroundColor: "#F0EAF8",
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 11,
+  },
+  numberText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#8D78B7",
+  },
+  keyPointText: {
+    flex: 1,
     fontSize: 13,
     lineHeight: 21,
+    color: "#746B80",
+    paddingTop: 2,
+  },
+  quizCard: {
+    backgroundColor: "#8D78B7",
+    borderRadius: 22,
+    padding: 19,
+    marginTop: 3,
+  },
+  quizIcon: {
+    width: 45,
+    height: 45,
+    borderRadius: 14,
+    backgroundColor: "rgba(255,255,255,0.18)",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 12,
+  },
+  quizTitle: {
+    fontSize: 17,
+    fontWeight: "700",
+    color: "#FFFFFF",
+    marginBottom: 6,
+  },
+  quizDescription: {
+    fontSize: 12,
+    lineHeight: 19,
+    color: "#F0EAF8",
+    marginBottom: 17,
+  },
+  quizButton: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 14,
+    paddingHorizontal: 17,
+    paddingVertical: 13,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  quizButtonText: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#79649F",
+    marginRight: 5,
+  },
+  emptyCard: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 24,
+    padding: 27,
+    alignItems: "center",
+    marginHorizontal: 22,
+    marginTop: 30,
+  },
+  emptyCardCompact: {
+    marginHorizontal: 18,
+    padding: 22,
+  },
+  emptyTitle: {
+    fontSize: 19,
+    fontWeight: "700",
+    color: "#51446B",
+    marginTop: 15,
+  },
+  emptyText: {
+    fontSize: 13,
+    lineHeight: 20,
+    color: "#92899F",
     textAlign: "center",
     marginTop: 8,
-    marginBottom: 5,
+    marginBottom: 20,
   },
-
   button: {
-    backgroundColor: "#DDA6AD",
-    paddingHorizontal: 30,
-    paddingVertical: 15,
-    borderRadius: 25,
-    alignItems: "center",
-    marginTop: 19,
-    shadowColor: "#B77D88",
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.17,
-    shadowRadius: 5,
-    elevation: 3,
+    backgroundColor: "#9B86C4",
+    paddingHorizontal: 25,
+    paddingVertical: 13,
+    borderRadius: 15,
   },
-
-  quizButton: {
-    width: "100%",
-  },
-
-  buttonPressed: {
-    opacity: 0.8,
-    transform: [{ scale: 0.97 }],
-  },
-
   buttonText: {
     color: "#FFFFFF",
-    fontFamily: "Nunito_800ExtraBold",
-    fontSize: 14,
+    fontSize: 13,
+    fontWeight: "700",
   },
-
-  text: {
-    color: "#9B8588",
-    fontFamily: "Nunito_400Regular",
-    fontSize: 14,
-    textAlign: "center",
-    lineHeight: 22,
+  linkButton: {
+    marginTop: 10,
+    minHeight: 40,
+    paddingHorizontal: 12,
+    justifyContent: "center",
   },
-
-  footer: {
-    color: "#B6A196",
-    fontFamily: "Nunito_800ExtraBold",
-    fontSize: 9,
-    letterSpacing: 1.7,
-    textAlign: "center",
-    marginTop: 5,
+  linkButtonText: {
+    color: "#8D78B7",
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  pressed: {
+    opacity: 0.85,
   },
 });

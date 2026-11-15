@@ -43,6 +43,7 @@ example
 /android
 
 server/.env
-server/node_modules/.env
+server/node_modules/
 
+# env files with secrets
 .env

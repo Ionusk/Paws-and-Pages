@@ -1,29 +1,32 @@
-
-import React, {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
-
+import { router, useLocalSearchParams } from "expo-router";
 import {
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-  Pressable,
+    ArrowLeft,
+    CheckCircle2,
+    FileUp,
+    House,
+    PawPrint,
+} from "lucide-react-native";
+import {
+    useCallback,
+    useEffect,
+    useMemo,
+    useRef,
+    useState,
+    type ComponentRef,
+} from "react";
+import {
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Text,
+    useWindowDimensions,
+    View,
 } from "react-native";
 
-import {
-  useLocalSearchParams,
-  router,
-} from "expo-router";
-
-import { useAuth0 } from "react-native-auth0";
-
-const API_URL = "http://localhost:3001";
-const API_AUDIENCE = "https://paws-and-pages-api";
-const AUTH_SCOPE = "openid profile email offline_access";
+import { Notice } from "@/components/ui/feedback";
+import { COMPACT_BREAKPOINT } from "@/constants/palette";
+import { getErrorMessage, useApi } from "@/lib/api";
+import { goBack } from "@/lib/navigation";
 
 function TopNavigation() {
   return (
@@ -33,9 +36,12 @@ function TopNavigation() {
           styles.navigationButton,
           pressed && styles.navigationButtonPressed,
         ]}
-        onPress={() => router.back()}
+        onPress={() => goBack("/study")}
+        accessibilityRole="button"
+        accessibilityLabel="Go back"
       >
-        <Text style={styles.navigationButtonText}>← Back</Text>
+        <ArrowLeft size={17} color="#493653" />
+        <Text style={styles.navigationButtonText}>Back</Text>
       </Pressable>
 
       <Pressable
@@ -45,31 +51,43 @@ function TopNavigation() {
           pressed && styles.navigationButtonPressed,
         ]}
         onPress={() => router.replace("/home")}
+        accessibilityRole="button"
+        accessibilityLabel="Go to home"
       >
-        <Text style={styles.navigationButtonText}>⌂ Home</Text>
+        <House size={17} color="#493653" />
+        <Text style={styles.navigationButtonText}>Home</Text>
       </Pressable>
     </View>
   );
 }
 
 export default function QuizScreen() {
-  const { result } = useLocalSearchParams<{
+  const {
+    result,
+    viewAnswersOnly,
+  } = useLocalSearchParams<{
     result?: string;
+    viewAnswersOnly?: string;
   }>();
 
-  const { getCredentials } = useAuth0();
+  const { request } = useApi();
+  const { width } = useWindowDimensions();
+  const isCompact = width < COMPACT_BREAKPOINT;
 
+  // `data` must be declared before isAnswerMode.
   const data = useMemo(() => {
-    
     try {
       return result ? JSON.parse(result) : null;
-    } catch {
+    } catch (error) {
+      console.error("Could not read the quiz data:", error);
       return null;
     }
   }, [result]);
 
-  console.log("DATE QUIZ:", data);
-console.log("QUIZ ID:", data?.quizId);
+  const isAnswerMode =
+    String(viewAnswersOnly) === "true" ||
+    data?.viewAnswersOnly === true ||
+    data?.viewAnswersOnly === "true";
 
   const [answers, setAnswers] = useState<
     Record<number, number>
@@ -79,11 +97,26 @@ console.log("QUIZ ID:", data?.quizId);
   const [saved, setSaved] = useState(false);
   const [saveError, setSaveError] = useState("");
 
-  // Previne salvarea de mai multe ori pentru aceeași încercare.
+  // One save per attempt. attemptRef changes when the user restarts the
+  // quiz, so late responses from an older attempt are ignored.
+  const scrollRef = useRef<ComponentRef<typeof ScrollView>>(null);
   const saveAttemptRef = useRef(false);
-
-  // Identifică încercarea curentă, inclusiv după Try again.
   const attemptRef = useRef(0);
+  const mountedRef = useRef(true);
+  const requestRef = useRef(request);
+
+  useEffect(() => {
+    requestRef.current = request;
+  }, [request]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  const canSave = !isAnswerMode && !!data?.quizId;
 
   const allAnswered =
     !!data?.quiz?.length &&
@@ -99,110 +132,80 @@ console.log("QUIZ ID:", data?.quizId);
     0
   ) ?? 0;
 
-  useEffect(() => {
-    if (!allAnswered || !data?.quizId) {
-      return;
-    }
+  const saveResult = useCallback(
+    async (currentAnswers: Record<number, number>) => {
+      if (!canSave || saveAttemptRef.current) {
+        return;
+      }
 
-    if (saveAttemptRef.current) {
-      return;
-    }
+      saveAttemptRef.current = true;
 
-    saveAttemptRef.current = true;
+      const currentAttempt = attemptRef.current;
+      const isCurrent = () =>
+        mountedRef.current && attemptRef.current === currentAttempt;
 
-    const currentAttempt = attemptRef.current;
-    let cancelled = false;
-
-    const saveResult = async () => {
       try {
         setSaving(true);
         setSaved(false);
         setSaveError("");
 
-        console.log("Se salvează rezultatul quizului...");
-
-        const credentials = await getCredentials(
-          AUTH_SCOPE,
-          0,
-          {
-            audience: API_AUDIENCE,
-          }
-        );
-
         const answersPayload = data.quiz.map(
           (_: any, questionIndex: number) => ({
             questionIndex,
-            selectedAnswer: answers[questionIndex],
+            selectedAnswer: currentAnswers[questionIndex],
           })
         );
 
-        const response = await fetch(
-          `${API_URL}/api/study/quiz-results`,
-          {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${credentials.accessToken}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              quizId: Number(data.quizId),
-              answers: answersPayload,
-            }),
-          }
-        );
+        await requestRef.current("/api/study/quiz-results", {
+          method: "POST",
+          body: JSON.stringify({
+            quizId: Number(data.quizId),
+            answers: answersPayload,
+          }),
+        });
 
-        const responseData = await response.json();
-
-        if (!response.ok) {
-          throw new Error(
-            responseData.error ||
-              "Nu am putut salva rezultatul quizului."
-          );
-        }
-
-        console.log(
-          "Rezultat salvat în TigerData:",
-          responseData.result
-        );
-
-        if (
-          !cancelled &&
-          attemptRef.current === currentAttempt
-        ) {
+        if (isCurrent()) {
           setSaved(true);
           setSaveError("");
         }
-      } catch (error: any) {
-        console.error(
-          "Eroare la salvarea rezultatului:",
-          error
-        );
+      } catch (error) {
+        console.error("Could not save the quiz result:", error);
 
-        if (
-          !cancelled &&
-          attemptRef.current === currentAttempt
-        ) {
+        if (isCurrent()) {
+          // Allow the user to retry saving this same attempt.
+          saveAttemptRef.current = false;
           setSaveError(
-            error?.message ||
-              "A apărut o eroare la salvarea rezultatului."
+            getErrorMessage(
+              error,
+              "Something went wrong while saving your result."
+            )
           );
         }
       } finally {
-        if (
-          !cancelled &&
-          attemptRef.current === currentAttempt
-        ) {
+        if (isCurrent()) {
           setSaving(false);
         }
       }
-    };
+    },
+    [canSave, data]
+  );
 
-    saveResult();
+  // Save automatically as soon as the last question is answered.
+  // Retries after a failed save are manual.
+  const handleAnswer = (questionIndex: number, optionIndex: number) => {
+    const nextAnswers = { ...answers, [questionIndex]: optionIndex };
+    setAnswers(nextAnswers);
 
-    return () => {
-      cancelled = true;
-    };
-  }, [allAnswered, data, answers, getCredentials]);
+    const complete =
+      !!data?.quiz?.length &&
+      data.quiz.every(
+        (_: any, index: number) => nextAnswers[index] !== undefined
+      );
+
+    if (complete) {
+      saveResult(nextAnswers);
+    }
+  };
 
   const handleRetry = () => {
     attemptRef.current += 1;
@@ -212,6 +215,9 @@ console.log("QUIZ ID:", data?.quizId);
     setSaving(false);
     setSaved(false);
     setSaveError("");
+
+    // Bring the first question back into view.
+    scrollRef.current?.scrollTo({ y: 0, animated: true });
   };
 
   if (!data?.quiz?.length) {
@@ -219,36 +225,64 @@ console.log("QUIZ ID:", data?.quizId);
       <View style={styles.emptyContainer}>
         <TopNavigation />
 
-        <Text style={styles.emptyEmoji}>🐾</Text>
+        <PawPrint
+          size={42}
+          color="#806B87"
+          strokeWidth={1.7}
+          style={{ marginBottom: 14 }}
+        />
 
         <Text style={styles.title}>
           No quiz available
         </Text>
 
         <Text style={styles.body}>
-          Generate a study material first.
+          Upload a study material first and Laica will prepare a quiz for you.
         </Text>
+
+        <Pressable
+          style={({ pressed }) => [
+            styles.retryButton,
+            styles.emptyButton,
+            pressed && styles.retryButtonPressed,
+          ]}
+          onPress={() => router.push("/study/upload")}
+          accessibilityRole="button"
+        >
+          <FileUp size={16} color="#FFFFFF" />
+          <Text style={styles.retryText}>Upload material</Text>
+        </Pressable>
       </View>
     );
   }
 
+  const answeredCount = Object.keys(answers).length;
+
   return (
     <ScrollView
-      contentContainerStyle={styles.container}
+      ref={scrollRef}
+      contentContainerStyle={[
+        styles.container,
+        isCompact && styles.containerCompact,
+      ]}
       showsVerticalScrollIndicator={false}
     >
       <TopNavigation />
 
       <Text style={styles.eyebrow}>
-        PAWS & PAGES  ✿  STUDY TIME
+        PAWS & PAGES  ·  STUDY TIME
       </Text>
 
       <Text style={styles.title}>
-        Test your knowledge
+        {isAnswerMode
+          ? "Answer key"
+          : "Test your knowledge"}
       </Text>
 
       <Text style={styles.subtitle}>
-        A little practice goes a long way ♡
+        {isAnswerMode
+          ? "All the correct answers, together with their explanations."
+          : "A little practice goes a long way."}
       </Text>
 
       <View style={styles.topicCard}>
@@ -257,17 +291,21 @@ console.log("QUIZ ID:", data?.quizId);
         </Text>
 
         <Text style={styles.topicTitle}>
-          {data.title}
+          {data.title || data.fileName || "Study material"}
         </Text>
       </View>
 
       <View style={styles.progressInfo}>
         <Text style={styles.progressText}>
-          YOUR QUESTIONS
+          {isAnswerMode
+            ? "CORRECT ANSWERS"
+            : "YOUR QUESTIONS"}
         </Text>
 
         <Text style={styles.progressCount}>
-          {Object.keys(answers).length} / {data.quiz.length}
+          {isAnswerMode
+            ? `${data.quiz.length} questions`
+            : `${answeredCount} / ${data.quiz.length}`}
         </Text>
       </View>
 
@@ -276,9 +314,12 @@ console.log("QUIZ ID:", data?.quizId);
           style={[
             styles.progressFill,
             {
-              width: `${
-                (Object.keys(answers).length / data.quiz.length) * 100
-              }%`,
+              width: isAnswerMode
+                ? "100%"
+                : `${(answeredCount / data.quiz.length) * 100}%`,
+              backgroundColor: isAnswerMode
+                ? "#638363"
+                : "#806B87",
             },
           ]}
         />
@@ -287,39 +328,59 @@ console.log("QUIZ ID:", data?.quizId);
       {data.quiz.map((question: any, index: number) => {
         const selected = answers[index];
         const answered = selected !== undefined;
+        const options: string[] = Array.isArray(question.options)
+          ? question.options
+          : [];
 
         return (
           <View style={styles.card} key={index}>
             <Text style={styles.questionNumber}>
-              QUESTION {String(index + 1).padStart(2, "0")}  ✿
+              QUESTION {String(index + 1).padStart(2, "0")}
             </Text>
 
             <Text style={styles.question}>
               {question.question}
             </Text>
 
-            {question.options.map(
+            {options.map(
               (option: string, optionIndex: number) => {
                 const isCorrect =
                   optionIndex === question.correctAnswer;
 
-                const isSelected = selected === optionIndex;
+                const isSelected =
+                  selected === optionIndex;
+
+                const letter = String.fromCharCode(65 + optionIndex);
 
                 return (
                   <Pressable
                     key={optionIndex}
-                    disabled={answered}
-                    onPress={() =>
-                      setAnswers((previous) => ({
-                        ...previous,
-                        [index]: optionIndex,
-                      }))
-                    }
+                    disabled={isAnswerMode || answered}
+                    onPress={() => handleAnswer(index, optionIndex)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Option ${letter}: ${option}`}
+                    accessibilityState={{
+                      disabled: isAnswerMode || answered,
+                      selected: isSelected,
+                    }}
                     style={[
                       styles.option,
-                      isSelected && styles.selected,
-                      answered && isCorrect && styles.correct,
-                      answered &&
+
+                      isAnswerMode &&
+                        isCorrect &&
+                        styles.correct,
+
+                      !isAnswerMode &&
+                        isSelected &&
+                        styles.selected,
+
+                      !isAnswerMode &&
+                        answered &&
+                        isCorrect &&
+                        styles.correct,
+
+                      !isAnswerMode &&
+                        answered &&
                         isSelected &&
                         !isCorrect &&
                         styles.incorrect,
@@ -329,47 +390,65 @@ console.log("QUIZ ID:", data?.quizId);
                       <View
                         style={[
                           styles.optionLetter,
-                          isSelected && styles.optionLetterSelected,
-                          answered &&
+
+                          !isAnswerMode &&
+                            isSelected &&
+                            styles.optionLetterSelected,
+
+                          (isAnswerMode || (answered && isCorrect)) &&
                             isCorrect &&
                             styles.optionLetterCorrect,
-                          answered &&
+
+                          !isAnswerMode &&
+                            answered &&
                             isSelected &&
                             !isCorrect &&
                             styles.optionLetterIncorrect,
                         ]}
                       >
                         <Text style={styles.optionLetterText}>
-                          {String.fromCharCode(65 + optionIndex)}
+                          {letter}
                         </Text>
                       </View>
 
                       <Text style={styles.optionText}>
                         {option}
                       </Text>
+
+                      {(isAnswerMode || answered) && isCorrect && (
+                        <CheckCircle2
+                          size={21}
+                          color="#638363"
+                          strokeWidth={2.2}
+                        />
+                      )}
                     </View>
                   </Pressable>
                 );
               }
             )}
 
-            {answered && (
+            {(isAnswerMode || answered) && (
               <View
                 style={[
                   styles.explanation,
+                  isAnswerMode ||
                   selected === question.correctAnswer
                     ? styles.correctExplanation
                     : styles.incorrectExplanation,
                 ]}
               >
                 <Text style={styles.explanationTitle}>
-                  {selected === question.correctAnswer
-                    ? "Lovely! That's correct ♡"
-                    : "A little reminder ✿"}
+                  {isAnswerMode
+                    ? "Correct answer"
+                    : selected === question.correctAnswer
+                    ? "Lovely! That's correct"
+                    : "A little reminder"}
                 </Text>
 
                 <Text style={styles.explanationText}>
-                  {question.explanation}
+                  {question.explanation ||
+                    "Review this question and remember the correct answer."}
                 </Text>
               </View>
             )}
@@ -377,7 +456,7 @@ console.log("QUIZ ID:", data?.quizId);
         );
       })}
 
-      {allAnswered && (
+      {!isAnswerMode && allAnswered && (
         <View style={styles.resultCard}>
           <Text style={styles.resultDecoration}>
             ✿  ♡  ✿
@@ -398,6 +477,13 @@ console.log("QUIZ ID:", data?.quizId);
           </Text>
 
           <View style={styles.saveStatus}>
+            {!canSave && (
+              <Notice
+                tone="info"
+                message="This quiz isn't linked to your library, so this result won't be saved."
+              />
+            )}
+
             {saving && (
               <Text style={styles.savingText}>
                 Saving your result...
@@ -405,34 +491,61 @@ console.log("QUIZ ID:", data?.quizId);
             )}
 
             {saved && (
-              <Text style={styles.savedText}>
-                ✓ Result saved successfully!
-              </Text>
+              <Notice tone="success" message="Result saved successfully!" />
             )}
 
-            {!!saveError && (
-              <Text style={styles.errorText}>
-                {saveError}
-              </Text>
+            {!!saveError && !saving && (
+              <Notice
+                tone="error"
+                title="Your result wasn't saved"
+                message={saveError}
+                actionLabel="Save again"
+                onAction={() => saveResult(answers)}
+              />
             )}
           </View>
 
-          <Pressable
-            style={({ pressed }) => [
-              styles.retryButton,
-              pressed && styles.retryButtonPressed,
-            ]}
-            onPress={handleRetry}
-          >
-            <Text style={styles.retryText}>
-              Try again  ↻
-            </Text>
-          </Pressable>
+          <View style={styles.resultActions}>
+            <Pressable
+              style={({ pressed }) => [
+                styles.retryButton,
+                styles.resultActionButton,
+                pressed && styles.retryButtonPressed,
+              ]}
+              onPress={handleRetry}
+              disabled={saving}
+              accessibilityRole="button"
+              accessibilityLabel="Try the quiz again"
+              accessibilityState={{ disabled: saving }}
+            >
+              <Text style={styles.retryText}>
+                Try again  ↻
+              </Text>
+            </Pressable>
+
+            <Pressable
+              style={({ pressed }) => [
+                styles.retryButton,
+                styles.resultActionButton,
+                styles.studyButton,
+                pressed && styles.retryButtonPressed,
+              ]}
+              onPress={() => router.dismissTo("/study")}
+              disabled={saving}
+              accessibilityRole="button"
+              accessibilityLabel="Back to your study space"
+              accessibilityState={{ disabled: saving }}
+            >
+              <Text style={[styles.retryText, styles.studyButtonText]}>
+                Back to Study
+              </Text>
+            </Pressable>
+          </View>
         </View>
       )}
 
       <Text style={styles.footer}>
-        MADE WITH LOVE  ♡  PAWS & PAGES
+        MADE WITH LOVE  ·  PAWS & PAGES
       </Text>
     </ScrollView>
   );
@@ -441,31 +554,41 @@ console.log("QUIZ ID:", data?.quizId);
 const styles = StyleSheet.create({
   container: {
     flexGrow: 1,
-    backgroundColor: "#FFF8F1",
+    backgroundColor: "#E9DDF2",
     paddingHorizontal: 22,
     paddingTop: 45,
     paddingBottom: 35,
+  },
+
+  containerCompact: {
+    paddingHorizontal: 16,
+    paddingTop: 32,
   },
 
   navigation: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
+    alignSelf: "stretch",
     marginBottom: 28,
   },
 
   navigationButton: {
-    backgroundColor: "#F4E8ED",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: "#F5ECFA",
     borderRadius: 14,
     paddingHorizontal: 17,
     paddingVertical: 11,
+    minHeight: 42,
     borderWidth: 1,
-    borderColor: "#EBD9E0",
+    borderColor: "#DCCBE7",
   },
 
   homeButton: {
-    backgroundColor: "#EAEFE6",
-    borderColor: "#DCE6D8",
+    backgroundColor: "#E0D1EA",
+    borderColor: "#CDB9DC",
   },
 
   navigationButtonPressed: {
@@ -474,57 +597,59 @@ const styles = StyleSheet.create({
   },
 
   navigationButtonText: {
-    color: "#8E6872",
+    color: "#493653",
     fontFamily: "Nunito_800ExtraBold",
     fontSize: 13,
   },
 
   emptyContainer: {
     flex: 1,
-    backgroundColor: "#FFF8F1",
+    backgroundColor: "#E9DDF2",
     justifyContent: "center",
     alignItems: "center",
     padding: 30,
   },
 
-  emptyEmoji: {
-    fontSize: 38,
-    marginBottom: 14,
+  emptyButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
   },
 
   eyebrow: {
-    color: "#A58B7C",
+    color: "#806B87",
     fontFamily: "Nunito_800ExtraBold",
     fontSize: 11,
     letterSpacing: 2,
   },
 
   title: {
-    color: "#59484C",
+    color: "#493653",
     fontFamily: "PlayfairDisplay_700Bold",
     fontSize: 30,
     marginTop: 17,
   },
 
   subtitle: {
-    color: "#9B8588",
+    color: "#806B87",
     fontFamily: "Nunito_400Regular",
     fontSize: 15,
     marginTop: 7,
     marginBottom: 23,
+    lineHeight: 22,
   },
 
   topicCard: {
-    backgroundColor: "#F4E8ED",
+    backgroundColor: "#F5ECFA",
     borderRadius: 19,
     padding: 17,
     marginBottom: 25,
     borderWidth: 1,
-    borderColor: "#EBD9E0",
+    borderColor: "#DCCBE7",
   },
 
   topicLabel: {
-    color: "#B77D88",
+    color: "#806B87",
     fontFamily: "Nunito_800ExtraBold",
     fontSize: 10,
     letterSpacing: 1.5,
@@ -532,7 +657,7 @@ const styles = StyleSheet.create({
   },
 
   topicTitle: {
-    color: "#59484C",
+    color: "#493653",
     fontFamily: "Nunito_700Bold",
     fontSize: 16,
     lineHeight: 23,
@@ -546,21 +671,21 @@ const styles = StyleSheet.create({
   },
 
   progressText: {
-    color: "#9B8588",
+    color: "#806B87",
     fontFamily: "Nunito_800ExtraBold",
     fontSize: 10,
     letterSpacing: 1.3,
   },
 
   progressCount: {
-    color: "#B77D88",
+    color: "#493653",
     fontFamily: "Nunito_800ExtraBold",
     fontSize: 12,
   },
 
   progressTrack: {
     height: 7,
-    backgroundColor: "#F0E4E5",
+    backgroundColor: "#DCCBE7",
     borderRadius: 10,
     overflow: "hidden",
     marginBottom: 24,
@@ -568,26 +693,25 @@ const styles = StyleSheet.create({
 
   progressFill: {
     height: "100%",
-    backgroundColor: "#DDA6AD",
     borderRadius: 10,
   },
 
   card: {
-    backgroundColor: "#FFFFFF",
+    backgroundColor: "#F5ECFA",
     borderRadius: 22,
     padding: 20,
     marginBottom: 17,
     borderWidth: 1,
-    borderColor: "#F0E4DA",
-    shadowColor: "#80675C",
+    borderColor: "#DCCBE7",
+    shadowColor: "#493653",
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.055,
+    shadowOpacity: 0.07,
     shadowRadius: 10,
     elevation: 2,
   },
 
   questionNumber: {
-    color: "#B77D88",
+    color: "#806B87",
     fontFamily: "Nunito_800ExtraBold",
     fontSize: 10,
     letterSpacing: 1.5,
@@ -595,7 +719,7 @@ const styles = StyleSheet.create({
   },
 
   question: {
-    color: "#59484C",
+    color: "#493653",
     fontFamily: "Nunito_800ExtraBold",
     fontSize: 17,
     lineHeight: 25,
@@ -603,9 +727,9 @@ const styles = StyleSheet.create({
   },
 
   option: {
-    backgroundColor: "#FFF9F5",
+    backgroundColor: "#EDE2F3",
     borderWidth: 1,
-    borderColor: "#F0E4DA",
+    borderColor: "#DCCBE7",
     borderRadius: 14,
     padding: 12,
     marginBottom: 10,
@@ -621,13 +745,13 @@ const styles = StyleSheet.create({
     width: 29,
     height: 29,
     borderRadius: 10,
-    backgroundColor: "#F4E8ED",
+    backgroundColor: "#DCCBE7",
     justifyContent: "center",
     alignItems: "center",
   },
 
   optionLetterSelected: {
-    backgroundColor: "#EBD0D8",
+    backgroundColor: "#CDB9DC",
   },
 
   optionLetterCorrect: {
@@ -639,15 +763,15 @@ const styles = StyleSheet.create({
   },
 
   optionLetterText: {
-    color: "#8E6872",
+    color: "#493653",
     fontFamily: "Nunito_800ExtraBold",
     fontSize: 12,
   },
 
   selected: {
-    borderColor: "#DDA6AD",
+    borderColor: "#806B87",
     borderWidth: 1.7,
-    backgroundColor: "#FDF4F5",
+    backgroundColor: "#E7D9EF",
   },
 
   correct: {
@@ -662,7 +786,7 @@ const styles = StyleSheet.create({
 
   optionText: {
     flex: 1,
-    color: "#78666A",
+    color: "#594763",
     fontFamily: "Nunito_600SemiBold",
     fontSize: 14,
     lineHeight: 21,
@@ -675,60 +799,60 @@ const styles = StyleSheet.create({
   },
 
   correctExplanation: {
-    backgroundColor: "#EFF4EC",
+    backgroundColor: "#EAF1E7",
   },
 
   incorrectExplanation: {
-    backgroundColor: "#F9EFEB",
+    backgroundColor: "#F9EAE5",
   },
 
   explanationTitle: {
-    color: "#59484C",
+    color: "#493653",
     fontFamily: "Nunito_800ExtraBold",
     fontSize: 13,
     marginBottom: 6,
   },
 
   explanationText: {
-    color: "#78666A",
+    color: "#594763",
     fontFamily: "Nunito_400Regular",
     lineHeight: 21,
     fontSize: 13,
   },
 
   resultCard: {
-    backgroundColor: "#F4E8ED",
+    backgroundColor: "#F5ECFA",
     padding: 25,
     borderRadius: 23,
     alignItems: "center",
     marginTop: 5,
     marginBottom: 25,
     borderWidth: 1,
-    borderColor: "#EBD9E0",
+    borderColor: "#DCCBE7",
   },
 
   resultDecoration: {
-    color: "#B77D88",
+    color: "#806B87",
     fontSize: 19,
     marginBottom: 10,
   },
 
   resultTitle: {
-    color: "#59484C",
+    color: "#493653",
     fontFamily: "PlayfairDisplay_700Bold",
     fontSize: 23,
     textAlign: "center",
   },
 
   score: {
-    color: "#B77D88",
+    color: "#806B87",
     fontFamily: "Nunito_800ExtraBold",
     fontSize: 43,
     marginVertical: 12,
   },
 
   resultText: {
-    color: "#78666A",
+    color: "#594763",
     fontFamily: "Nunito_600SemiBold",
     textAlign: "center",
     lineHeight: 22,
@@ -737,39 +861,25 @@ const styles = StyleSheet.create({
 
   saveStatus: {
     marginTop: 16,
-    alignItems: "center",
+    alignItems: "stretch",
     width: "100%",
+    gap: 10,
   },
 
   savingText: {
-    color: "#9B8588",
+    color: "#806B87",
     fontFamily: "Nunito_700Bold",
     fontSize: 13,
     textAlign: "center",
-  },
-
-  savedText: {
-    color: "#638363",
-    fontFamily: "Nunito_800ExtraBold",
-    fontSize: 13,
-    textAlign: "center",
-  },
-
-  errorText: {
-    color: "#B45F55",
-    fontFamily: "Nunito_700Bold",
-    fontSize: 13,
-    textAlign: "center",
-    lineHeight: 20,
   },
 
   retryButton: {
-    backgroundColor: "#DDA6AD",
+    backgroundColor: "#806B87",
     paddingHorizontal: 32,
     paddingVertical: 14,
     borderRadius: 25,
     marginTop: 21,
-    shadowColor: "#B77D88",
+    shadowColor: "#493653",
     shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.18,
     shadowRadius: 5,
@@ -781,6 +891,30 @@ const styles = StyleSheet.create({
     transform: [{ scale: 0.97 }],
   },
 
+  resultActions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "center",
+    gap: 12,
+    marginTop: 21,
+  },
+
+  resultActionButton: {
+    marginTop: 0,
+    minWidth: 160,
+    alignItems: "center",
+  },
+
+  studyButton: {
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: "#E7D9EE",
+  },
+
+  studyButtonText: {
+    color: "#493653",
+  },
+
   retryText: {
     color: "#FFFFFF",
     fontFamily: "Nunito_800ExtraBold",
@@ -788,14 +922,17 @@ const styles = StyleSheet.create({
   },
 
   body: {
-    color: "#9B8588",
+    color: "#806B87",
     fontFamily: "Nunito_400Regular",
     fontSize: 14,
     textAlign: "center",
+    marginTop: 8,
+    maxWidth: 380,
+    lineHeight: 21,
   },
 
   footer: {
-    color: "#B6A196",
+    color: "#806B87",
     fontFamily: "Nunito_800ExtraBold",
     fontSize: 9,
     letterSpacing: 1.7,

@@ -35,7 +35,14 @@
         }
       ],
       "expo-video",
-      "expo-font"
+      "expo-font",
+      "@livekit/react-native-expo-plugin",
+      [
+        "@config-plugins/react-native-webrtc",
+        {
+          "microphonePermission": "Paws & Pages uses the microphone so you can talk with Laica, your study buddy."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

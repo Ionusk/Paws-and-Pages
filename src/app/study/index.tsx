@@ -1,28 +1,51 @@
-
-import React from 'react';
+import { router, useFocusEffect, type Href } from 'expo-router';
 import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  Pressable,
-  SafeAreaView,
-} from 'react-native';
-import { router } from 'expo-router';
-import {
-  ArrowLeft,
-  FileText,
-  Brain,
-  Headphones,
-  GraduationCap,
-  Sparkles,
-  Clock3,
-  BookOpen,
-  ArrowUpRight,
-  PawPrint,
-  Target,
-  LibraryBig,
+    ArrowLeft,
+    ArrowUpRight,
+    BookOpen,
+    Brain,
+    Clock3,
+    FileText,
+    GraduationCap,
+    Headphones,
+    LibraryBig,
+    MessagesSquare,
+    Mic,
+    PawPrint,
+    Sparkles,
+    Target,
+    Upload,
 } from 'lucide-react-native';
+import { useCallback, useRef, useState } from 'react';
+import {
+    Pressable,
+    SafeAreaView,
+    ScrollView,
+    StyleSheet,
+    Text,
+    useWindowDimensions,
+    View,
+} from 'react-native';
+
+import { Notice, SoonBadge } from '@/components/ui/feedback';
+import { COMPACT_BREAKPOINT } from '@/constants/palette';
+import { getErrorMessage, useApi } from '@/lib/api';
+import { goBack } from '@/lib/navigation';
+
+type StudyStats = {
+  materials: number;
+  quizzes: number;
+};
+
+type StudyTool = {
+  title: string;
+  subtitle: string;
+  description: string;
+  // Tools without a route have no backend yet and are shown as "coming soon".
+  route: Href | null;
+  color: string;
+  icon: typeof FileText;
+};
 
 const COLORS = {
   background: '#E9DDF2',
@@ -39,7 +62,7 @@ const COLORS = {
   border: '#EDE3F0',
 };
 
-const tools = [
+const tools: StudyTool[] = [
   {
     title: 'Study materials',
     subtitle: 'Upload PDFs, Word documents, presentations and notes.',
@@ -52,7 +75,7 @@ const tools = [
     title: 'AI summaries',
     subtitle: 'Turn long courses into clear, easy-to-understand summaries.',
     description: 'UNDERSTAND BETTER',
-    route: '/study/summary',
+    route: '/study/aisummary',
     color: COLORS.lightPink,
     icon: BookOpen,
   },
@@ -60,28 +83,89 @@ const tools = [
     title: 'Practice quizzes',
     subtitle: 'Challenge yourself with questions based on your materials.',
     description: 'TEST YOUR KNOWLEDGE',
-    route: '/study/quiz',
+    route: '/study/practice',
     color: COLORS.sage,
     icon: Brain,
   },
   {
+    // There is no audio backend yet, so this tile is informational only.
     title: 'Audio lessons',
     subtitle: 'Listen to your study materials whenever you want.',
     description: 'LEARN ON THE GO',
-    route: '/study/summary',
+    route: null,
     color: COLORS.peach,
     icon: Headphones,
+  },
+  {
+    title: 'Talk with Laica',
+    subtitle: 'Ask questions out loud and get spoken explanations.',
+    description: 'VOICE STUDY BUDDY',
+    route: '/study/voice',
+    color: COLORS.lavender,
+    icon: Mic,
+  },
+  {
+    title: 'Saved conversations',
+    subtitle: 'Read your past voice chats with Laica again.',
+    description: 'YOUR CHAT HISTORY',
+    route: '/study/conversations',
+    color: COLORS.lightPink,
+    icon: MessagesSquare,
   },
 ];
 
 export default function StudyScreen() {
+  const { request } = useApi();
+  const { width } = useWindowDimensions();
+  const isCompact = width < COMPACT_BREAKPOINT;
+
+  const [stats, setStats] = useState<StudyStats | null>(null);
+  const [statsLoading, setStatsLoading] = useState(true);
+  const [statsError, setStatsError] = useState<string | null>(null);
+  const loadingRef = useRef(false);
+
+  const fetchStats = useCallback(async () => {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
+
+    try {
+      setStatsLoading(true);
+      setStatsError(null);
+
+      const data = await request<{ stats: StudyStats }>('/api/study/stats');
+
+      setStats(data.stats);
+    } catch (error) {
+      console.error('Learning Journey error:', error);
+      setStatsError(
+        getErrorMessage(error, "We couldn't load your learning statistics.")
+      );
+    } finally {
+      loadingRef.current = false;
+      setStatsLoading(false);
+    }
+  }, [request]);
+
+  useFocusEffect(
+    useCallback(() => {
+      fetchStats();
+    }, [fetchStats])
+  );
+
+  const statValue = (value: number | undefined) => {
+    if (statsLoading && !stats) return '...';
+    return value ?? '—';
+  };
+
+  const hasNoMaterials = !statsLoading && !statsError && stats?.materials === 0;
+
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
       >
-        <View style={styles.container}>
+        <View style={[styles.container, isCompact && styles.containerCompact]}>
           {/* Decorative background */}
           <View style={styles.blobTop} pointerEvents="none" />
           <View style={styles.blobBottom} pointerEvents="none" />
@@ -89,7 +173,9 @@ export default function StudyScreen() {
           {/* Header */}
           <View style={styles.header}>
             <Pressable
-              onPress={() => router.back()}
+              onPress={() => goBack('/home')}
+              accessibilityRole="button"
+              accessibilityLabel="Go back"
               style={({ pressed }) => [
                 styles.backButton,
                 pressed && styles.pressed,
@@ -115,7 +201,9 @@ export default function StudyScreen() {
               <Text style={styles.eyebrow}>YOUR LEARNING CORNER</Text>
             </View>
 
-            <Text style={styles.title}>Make room to grow.</Text>
+            <Text style={[styles.title, isCompact && styles.titleCompact]}>
+              Make room to grow.
+            </Text>
 
             <Text style={styles.subtitle}>
               A little progress every day adds up to something wonderful.
@@ -123,7 +211,9 @@ export default function StudyScreen() {
           </View>
 
           {/* Laica message */}
-          <View style={styles.mascotCard}>
+          <View
+            style={[styles.mascotCard, isCompact && styles.mascotCardCompact]}
+          >
             <View style={styles.mascotCircle}>
               <PawPrint size={36} color={COLORS.darkPink} />
               <View style={styles.mascotSparkle}>
@@ -135,14 +225,16 @@ export default function StudyScreen() {
               <Text style={styles.mascotEyebrow}>A LITTLE REMINDER</Text>
               <Text style={styles.mascotTitle}>Laica believes in you!</Text>
               <Text style={styles.mascotText}>
-                You don't have to know everything today. Just take the
+                You don&apos;t have to know everything today. Just take the
                 next little step.
               </Text>
             </View>
           </View>
 
           {/* Progress overview */}
-          <View style={styles.progressCard}>
+          <View
+            style={[styles.progressCard, isCompact && styles.cardCompact]}
+          >
             <View style={styles.progressHeader}>
               <View>
                 <Text style={styles.progressEyebrow}>YOUR PROGRESS</Text>
@@ -157,7 +249,9 @@ export default function StudyScreen() {
             <View style={styles.progressStats}>
               <View style={styles.progressStat}>
                 <LibraryBig size={19} color={COLORS.purple} />
-                <Text style={styles.progressNumber}>—</Text>
+                <Text style={styles.progressNumber}>
+                  {statValue(stats?.materials)}
+                </Text>
                 <Text style={styles.progressLabel}>Materials</Text>
               </View>
 
@@ -165,7 +259,8 @@ export default function StudyScreen() {
 
               <View style={styles.progressStat}>
                 <Clock3 size={19} color={COLORS.darkPink} />
-                <Text style={styles.progressNumber}>—</Text>
+                {/* No backend tracks study time yet, so say so honestly. */}
+                <Text style={styles.progressNotTracked}>Not tracked yet</Text>
                 <Text style={styles.progressLabel}>Study time</Text>
               </View>
 
@@ -173,20 +268,53 @@ export default function StudyScreen() {
 
               <View style={styles.progressStat}>
                 <Brain size={19} color="#758B72" />
-                <Text style={styles.progressNumber}>—</Text>
+                <Text style={styles.progressNumber}>
+                  {statValue(stats?.quizzes)}
+                </Text>
                 <Text style={styles.progressLabel}>Quizzes</Text>
               </View>
             </View>
 
-            <Text style={styles.progressNote}>
-              Your learning statistics will grow as you use the app.
-            </Text>
+            {statsError ? (
+              <Notice
+                tone="error"
+                message={statsError}
+                actionLabel={statsLoading ? undefined : 'Try again'}
+                onAction={fetchStats}
+                style={styles.progressNotice}
+              />
+            ) : hasNoMaterials ? (
+              <View style={styles.progressEmpty}>
+                <Text style={styles.progressNote}>
+                  Upload your first material and Laica will turn it into a
+                  summary and a quiz.
+                </Text>
+
+                <Pressable
+                  onPress={() => router.push('/study/upload')}
+                  accessibilityRole="button"
+                  style={({ pressed }) => [
+                    styles.progressButton,
+                    pressed && styles.pressed,
+                  ]}
+                >
+                  <Upload size={16} color={COLORS.white} />
+                  <Text style={styles.progressButtonText}>
+                    Upload your first material
+                  </Text>
+                </Pressable>
+              </View>
+            ) : (
+              <Text style={styles.progressNote}>
+                Your learning statistics will grow as you use the app.
+              </Text>
+            )}
           </View>
 
           {/* Tools */}
           <View style={styles.toolsSection}>
             <View style={styles.sectionHeader}>
-              <View>
+              <View style={styles.sectionHeaderText}>
                 <Text style={styles.sectionEyebrow}>READY WHEN YOU ARE</Text>
                 <Text style={styles.sectionTitle}>Explore your tools</Text>
               </View>
@@ -195,32 +323,23 @@ export default function StudyScreen() {
             </View>
 
             <View style={styles.toolsGrid}>
-              {tools.map((tool, index) => {
+              {tools.map((tool) => {
                 const Icon = tool.icon;
+                const route = tool.route;
+                const available = route !== null;
 
-                return (
-                  <Pressable
-                    key={tool.title}
-                    style={({ pressed }) => [
-                      styles.toolCard,
-                      { backgroundColor: tool.color },
-                      pressed && styles.cardPressed,
-                    ]}
-                    onPress={() => router.push(tool.route as any)}
-                  >
+                const content = (
+                  <>
                     <View style={styles.toolTop}>
                       <View style={styles.toolIcon}>
-                        <Icon
-                          size={25}
-                          color={COLORS.text}
-                          strokeWidth={1.7}
-                        />
+                        <Icon size={25} color={COLORS.text} strokeWidth={1.7} />
                       </View>
 
-                      <ArrowUpRight
-                        size={20}
-                        color={COLORS.muted}
-                      />
+                      {available ? (
+                        <ArrowUpRight size={20} color={COLORS.muted} />
+                      ) : (
+                        <SoonBadge />
+                      )}
                     </View>
 
                     <View>
@@ -231,8 +350,45 @@ export default function StudyScreen() {
                     </View>
 
                     <View style={styles.toolFooter}>
-                      <Text style={styles.toolTag}>{tool.description}</Text>
+                      <Text style={styles.toolTag}>
+                        {available ? tool.description : 'NOT AVAILABLE YET'}
+                      </Text>
                     </View>
+                  </>
+                );
+
+                if (route === null) {
+                  return (
+                    <View
+                      key={tool.title}
+                      accessible
+                      accessibilityLabel={`${tool.title}, coming soon`}
+                      style={[
+                        styles.toolCard,
+                        isCompact && styles.toolCardCompact,
+                        { backgroundColor: tool.color },
+                        styles.toolCardDisabled,
+                      ]}
+                    >
+                      {content}
+                    </View>
+                  );
+                }
+
+                return (
+                  <Pressable
+                    key={tool.title}
+                    accessibilityRole="button"
+                    accessibilityLabel={tool.title}
+                    style={({ pressed }) => [
+                      styles.toolCard,
+                      isCompact && styles.toolCardCompact,
+                      { backgroundColor: tool.color },
+                      pressed && styles.cardPressed,
+                    ]}
+                    onPress={() => router.push(route)}
+                  >
+                    {content}
                   </Pressable>
                 );
               })}
@@ -284,6 +440,10 @@ const styles = StyleSheet.create({
     paddingTop: 24,
     paddingBottom: 35,
     overflow: 'hidden',
+  },
+
+  containerCompact: {
+    paddingHorizontal: 20,
   },
 
   blobTop: {
@@ -380,6 +540,10 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 
+  titleCompact: {
+    fontSize: 30,
+  },
+
   subtitle: {
     color: COLORS.muted,
     fontSize: 13,
@@ -405,6 +569,11 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.06,
     shadowRadius: 10,
     elevation: 2,
+  },
+
+  mascotCardCompact: {
+    padding: 18,
+    gap: 14,
   },
 
   mascotCircle: {
@@ -464,6 +633,10 @@ const styles = StyleSheet.create({
     marginBottom: 38,
   },
 
+  cardCompact: {
+    padding: 18,
+  },
+
   progressHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -512,6 +685,14 @@ const styles = StyleSheet.create({
     fontFamily: 'PlayfairDisplay_700Bold',
   },
 
+  progressNotTracked: {
+    color: COLORS.muted,
+    fontSize: 12,
+    lineHeight: 29,
+    fontFamily: 'Nunito_700Bold',
+    textAlign: 'center',
+  },
+
   progressLabel: {
     color: COLORS.muted,
     fontSize: 10,
@@ -533,6 +714,32 @@ const styles = StyleSheet.create({
     marginTop: 20,
   },
 
+  progressNotice: {
+    marginTop: 20,
+  },
+
+  progressEmpty: {
+    alignItems: 'center',
+  },
+
+  progressButton: {
+    marginTop: 12,
+    minHeight: 42,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: COLORS.darkPink,
+    borderRadius: 14,
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+  },
+
+  progressButtonText: {
+    color: COLORS.white,
+    fontSize: 12,
+    fontFamily: 'Nunito_800ExtraBold',
+  },
+
   toolsSection: {
     marginBottom: 30,
   },
@@ -542,6 +749,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     marginBottom: 18,
+  },
+
+  sectionHeaderText: {
+    flexShrink: 1,
   },
 
   sectionEyebrow: {
@@ -578,6 +789,16 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.07,
     shadowRadius: 9,
     elevation: 3,
+  },
+
+  toolCardCompact: {
+    width: '100%',
+    minHeight: 0,
+    padding: 18,
+  },
+
+  toolCardDisabled: {
+    opacity: 0.7,
   },
 
   toolTop: {

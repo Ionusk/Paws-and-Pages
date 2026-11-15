@@ -1,9 +1,9 @@
 import { CdpClient } from "@coinbase/cdp-sdk";
 import {
-    createMintToInstruction,
-    getAccount,
-    getAssociatedTokenAddress,
-    getMint,
+  createMintToInstruction,
+  getAccount,
+  getAssociatedTokenAddress,
+  getMint,
 } from "@solana/spl-token";
 import { Connection, PublicKey, Transaction } from "@solana/web3.js";
 import "dotenv/config";
@@ -13,15 +13,16 @@ const cdp = new CdpClient();
 
 const connection = new Connection("https://api.devnet.solana.com", "confirmed");
 
-const USER_ID = 23;
+const USER_ID = 1;
 const AMOUNT = 500n;
 const TREASURY_NAME = "paws-and-pages-devnet-test";
 
 async function main() {
   // 1. Citim wallet-ul utilizatorului din baza de date.
   const result = await pool.query(
-    "SELECT solana_wallet_address FROM users WHERE id = 23",
-  );
+  "SELECT solana_wallet_address FROM users WHERE id = $1",
+  [USER_ID],
+);
 
   const userAddress = result.rows[0]?.solana_wallet_address;
 

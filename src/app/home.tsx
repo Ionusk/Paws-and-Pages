@@ -1,30 +1,36 @@
 import { router } from "expo-router";
 import {
-  ArrowRight,
-  ArrowUpRight,
-  BookOpen,
-  ClipboardList,
-  Coins,
-  Dog,
-  GraduationCap,
-  Heart,
-  LibraryBig,
-  NotebookPen,
-  PawPrint,
-  ShoppingBag,
-  Sparkles,
-  UserRound,
-  UsersRound,
+    ArrowRight,
+    ArrowUpRight,
+    BookOpen,
+    ClipboardList,
+    Coins,
+    Dog,
+    GraduationCap,
+    Heart,
+    LibraryBig,
+    NotebookPen,
+    PawPrint,
+    ShoppingBag,
+    Sparkles,
+    UserRound,
+    UsersRound,
 } from "lucide-react-native";
 import {
-  Pressable,
-  SafeAreaView,
-  ScrollView,
-  StatusBar,
-  StyleSheet,
-  Text,
-  View,
+    Pressable,
+    SafeAreaView,
+    ScrollView,
+    StatusBar,
+    StyleSheet,
+    Text,
+    useWindowDimensions,
+    View,
 } from "react-native";
+import { useAuth0 } from "react-native-auth0";
+
+import { SoonBadge } from "@/components/ui/feedback";
+import { COMPACT_BREAKPOINT } from "@/constants/palette";
+import { useProgressStats } from "@/hooks/useProgressStats";
 import { AnimatedMascot } from "../components/AnimatedMascot";
 import { usePawWallet } from "../hooks/usePawWallet";
 
@@ -43,19 +49,51 @@ const COLORS = {
   purple: "#9B829F",
 };
 
+function formatStat(value: number | undefined, loading: boolean) {
+  if (loading && value === undefined) return "...";
+  if (value === undefined) return "—";
+  return value.toLocaleString();
+}
+
 export default function HomeScreen() {
-  const { balance, loading: walletLoading } = usePawWallet();
+  const { width } = useWindowDimensions();
+  const isCompact = width < COMPACT_BREAKPOINT;
+  const isMedium = width < 900;
+
+  const { user } = useAuth0();
+  const {
+    balance,
+    loading: walletLoading,
+    error: walletError,
+  } = usePawWallet();
+  const { stats, loading: statsLoading } = useProgressStats();
+
+  // Auth0 often uses the email as "name"; prefer a real name when there is one.
+  const rawName =
+    user?.name && !user.name.includes("@") ? user.name : user?.nickname;
+  const firstName = (rawName || "").split(" ")[0];
+
+  const balanceText = walletLoading
+    ? "..."
+    : balance !== null
+      ? balance
+      : "—";
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="dark-content" />
 
       <ScrollView
         style={styles.container}
-        contentContainerStyle={styles.content}
+        contentContainerStyle={[
+          styles.content,
+          isMedium && styles.contentMedium,
+          isCompact && styles.contentCompact,
+        ]}
         showsVerticalScrollIndicator={false}
       >
         {/* HEADER */}
-        <View style={styles.header}>
+        <View style={[styles.header, isCompact && styles.headerCompact]}>
           <View>
             <View style={styles.logoRow}>
               <Text style={styles.logo}>paws & pages</Text>
@@ -64,35 +102,48 @@ export default function HomeScreen() {
             <Text style={styles.headerSubtitle}>YOUR LITTLE HAPPY PLACE</Text>
           </View>
 
-          <View style={styles.headerActions}>
+          <View
+            style={[
+              styles.headerActions,
+              isCompact && styles.headerActionsCompact,
+            ]}
+          >
             <Pressable
               style={({ pressed }) => [
                 styles.questsButton,
+                isCompact && styles.iconOnlyButton,
                 pressed && styles.pressed,
               ]}
               onPress={() => router.push("/quests")}
+              accessibilityRole="button"
+              accessibilityLabel="Quests"
             >
               <ClipboardList
                 size={19}
                 color={COLORS.purple}
                 strokeWidth={1.8}
               />
-              <Text style={styles.questsButtonText}>Quests</Text>
+              {!isCompact && (
+                <Text style={styles.questsButtonText}>Quests</Text>
+              )}
             </Pressable>
 
             <Pressable
               style={({ pressed }) => [
                 styles.shopButton,
+                isCompact && styles.iconOnlyButton,
                 pressed && styles.pressed,
               ]}
               onPress={() => router.push("/shop")}
+              accessibilityRole="button"
+              accessibilityLabel="Laica's Shop"
             >
               <ShoppingBag
                 size={19}
                 color={COLORS.darkPink}
                 strokeWidth={1.8}
               />
-              <Text style={styles.shopButtonText}>Shop</Text>
+              {!isCompact && <Text style={styles.shopButtonText}>Shop</Text>}
             </Pressable>
 
             <Pressable
@@ -101,12 +152,16 @@ export default function HomeScreen() {
                 pressed && styles.pressed,
               ]}
               onPress={() => router.push("/shop")}
+              accessibilityRole="button"
+              accessibilityLabel={
+                walletError
+                  ? "PAW balance unavailable. Open the shop for details."
+                  : `PAW balance: ${balanceText}. Open the shop.`
+              }
             >
               <Coins size={19} color={COLORS.darkPink} strokeWidth={1.8} />
 
-              <Text style={styles.pawBalanceText}>
-                {walletLoading ? "..." : balance !== null ? balance : "—"}
-              </Text>
+              <Text style={styles.pawBalanceText}>{balanceText}</Text>
 
               <Text style={styles.pawBalanceLabel}>PAW</Text>
             </Pressable>
@@ -117,6 +172,8 @@ export default function HomeScreen() {
                 pressed && styles.pressed,
               ]}
               onPress={() => router.push("/account")}
+              accessibilityRole="button"
+              accessibilityLabel="My account"
             >
               <UserRound size={25} color={COLORS.darkPink} strokeWidth={1.7} />
             </Pressable>
@@ -124,26 +181,53 @@ export default function HomeScreen() {
         </View>
 
         {/* WELCOME + LAICA */}
-        <View style={styles.welcomeWrapper}>
-          <View style={styles.welcomeMascot}>
-            <AnimatedMascot animation="sleepy" />
+        <View
+          style={[
+            styles.welcomeWrapper,
+            isCompact && styles.welcomeWrapperCompact,
+          ]}
+        >
+          <View
+            style={[
+              styles.welcomeMascot,
+              isCompact && styles.welcomeMascotCompact,
+            ]}
+          >
+            <AnimatedMascot animation="sleepy" size={isCompact ? 230 : 300} />
           </View>
 
-          <View style={styles.welcomeSection}>
+          <View
+            style={[
+              styles.welcomeSection,
+              isCompact && styles.welcomeSectionCompact,
+            ]}
+          >
             <View style={styles.welcomeTextContainer}>
               <Text style={styles.eyebrow}>A NEW DAY, A NEW CHAPTER</Text>
-              <Text style={styles.welcomeTitle}>
-                Welcome to your
-                {"\n"}
-                little world!
+              <Text
+                style={[
+                  styles.welcomeTitle,
+                  isCompact && styles.welcomeTitleCompact,
+                ]}
+              >
+                {firstName ? `Welcome back,\n${firstName}!` : "Welcome to your\nlittle world!"}
               </Text>
               <Text style={styles.welcomeDescription}>
-                A place to learn, read, grow and make every little moment count.
+                Pick up a book, open your study space or check today’s quests.
               </Text>
             </View>
 
-            <View style={styles.welcomeDecoration}>
-              <Dog size={76} color={COLORS.darkPink} strokeWidth={1.3} />
+            <View
+              style={[
+                styles.welcomeDecoration,
+                isCompact && styles.welcomeDecorationCompact,
+              ]}
+            >
+              <Dog
+                size={isCompact ? 48 : 76}
+                color={COLORS.darkPink}
+                strokeWidth={1.3}
+              />
               <View style={styles.sparkleOne}>
                 <Sparkles size={20} color={COLORS.darkPink} strokeWidth={1.5} />
               </View>
@@ -166,14 +250,17 @@ export default function HomeScreen() {
         </View>
 
         {/* STUDY + READING */}
-        <View style={styles.mainGrid}>
+        <View style={[styles.mainGrid, isCompact && styles.gridCompact]}>
           <Pressable
             style={({ pressed }) => [
               styles.mainCard,
+              isCompact && styles.cardCompact,
               styles.studyCard,
               pressed && styles.pressed,
             ]}
             onPress={() => router.push("/study")}
+            accessibilityRole="button"
+            accessibilityLabel="Study. Learn smarter with your AI study buddy."
           >
             <View style={styles.cardTop}>
               <View style={styles.iconCircle}>
@@ -202,10 +289,13 @@ export default function HomeScreen() {
           <Pressable
             style={({ pressed }) => [
               styles.mainCard,
+              isCompact && styles.cardCompact,
               styles.readingCard,
               pressed && styles.pressed,
             ]}
             onPress={() => router.push("/reading")}
+            accessibilityRole="button"
+            accessibilityLabel="Reading. Keep track of books and your reading journey."
           >
             <View style={styles.cardTop}>
               <View style={styles.iconCircle}>
@@ -239,20 +329,23 @@ export default function HomeScreen() {
           <Heart size={25} color={COLORS.darkPink} strokeWidth={1.5} />
         </View>
 
-        <View style={styles.secondaryGrid}>
+        <View style={[styles.secondaryGrid, isCompact && styles.gridCompact]}>
           <Pressable
             style={({ pressed }) => [
               styles.secondaryCard,
+              isCompact && styles.cardCompact,
               styles.friendsCard,
               pressed && styles.pressed,
             ]}
             onPress={() => router.push("/friends")}
+            accessibilityRole="button"
+            accessibilityLabel="Friends. Coming soon."
           >
             <View style={styles.secondaryCardTop}>
               <View style={styles.secondaryIcon}>
                 <UsersRound size={25} color="#71866F" strokeWidth={1.7} />
               </View>
-              <ArrowUpRight size={22} color={COLORS.muted} strokeWidth={1.6} />
+              <SoonBadge />
             </View>
 
             <View>
@@ -263,7 +356,7 @@ export default function HomeScreen() {
             </View>
 
             <View style={styles.secondaryCardBottom}>
-              <Text style={styles.secondaryLink}>MEET FRIENDS</Text>
+              <Text style={styles.secondaryLink}>SEE WHAT’S PLANNED</Text>
               <ArrowRight size={17} color={COLORS.text} strokeWidth={1.7} />
             </View>
           </Pressable>
@@ -271,16 +364,19 @@ export default function HomeScreen() {
           <Pressable
             style={({ pressed }) => [
               styles.secondaryCard,
+              isCompact && styles.cardCompact,
               styles.campusCard,
               pressed && styles.pressed,
             ]}
             onPress={() => router.push("/campus")}
+            accessibilityRole="button"
+            accessibilityLabel="Campus Books. Coming soon for verified UPT students."
           >
             <View style={styles.secondaryCardTop}>
               <View style={styles.secondaryIcon}>
                 <LibraryBig size={25} color="#A77C6C" strokeWidth={1.7} />
               </View>
-              <ArrowUpRight size={22} color={COLORS.muted} strokeWidth={1.6} />
+              <SoonBadge />
             </View>
 
             <View>
@@ -291,7 +387,7 @@ export default function HomeScreen() {
             </View>
 
             <View style={styles.secondaryCardBottom}>
-              <Text style={styles.secondaryLink}>EXPLORE BOOKS</Text>
+              <Text style={styles.secondaryLink}>SEE WHAT’S PLANNED</Text>
               <ArrowRight size={17} color={COLORS.text} strokeWidth={1.7} />
             </View>
           </Pressable>
@@ -315,8 +411,10 @@ export default function HomeScreen() {
             >
               <BookOpen size={19} color={COLORS.darkPink} strokeWidth={1.7} />
             </View>
-            <Text style={styles.statNumber}>0</Text>
-            <Text style={styles.statLabel}>Books read</Text>
+            <Text style={styles.statNumber}>
+              {formatStat(stats?.booksFinished, statsLoading)}
+            </Text>
+            <Text style={styles.statLabel}>Books finished</Text>
           </View>
 
           <View style={styles.statDivider} />
@@ -327,8 +425,10 @@ export default function HomeScreen() {
             >
               <NotebookPen size={19} color={COLORS.purple} strokeWidth={1.7} />
             </View>
-            <Text style={styles.statNumber}>0</Text>
-            <Text style={styles.statLabel}>Study sessions</Text>
+            <Text style={styles.statNumber}>
+              {formatStat(stats?.studyMaterials, statsLoading)}
+            </Text>
+            <Text style={styles.statLabel}>Study materials</Text>
           </View>
 
           <View style={styles.statDivider} />
@@ -337,8 +437,10 @@ export default function HomeScreen() {
             <View style={[styles.statIcon, { backgroundColor: COLORS.sage }]}>
               <Heart size={19} color="#71866F" strokeWidth={1.7} />
             </View>
-            <Text style={styles.statNumber}>0</Text>
-            <Text style={styles.statLabel}>Friends</Text>
+            <Text style={styles.statNumber}>
+              {formatStat(stats?.quizzes, statsLoading)}
+            </Text>
+            <Text style={styles.statLabel}>Quizzes</Text>
           </View>
         </View>
 
@@ -383,17 +485,81 @@ const styles = StyleSheet.create({
     alignSelf: "center",
   },
 
+  contentMedium: {
+    paddingHorizontal: 30,
+  },
+
+  contentCompact: {
+    paddingHorizontal: 18,
+    paddingTop: 16,
+  },
+
   header: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
     marginBottom: 35,
+    gap: 12,
+  },
+
+  headerCompact: {
+    flexDirection: "column",
+    alignItems: "flex-start",
+    marginBottom: 20,
   },
 
   headerActions: {
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
+  },
+
+  headerActionsCompact: {
+    alignSelf: "stretch",
+    justifyContent: "space-between",
+    gap: 8,
+  },
+
+  iconOnlyButton: {
+    width: 49,
+    paddingHorizontal: 0,
+  },
+
+  // On phones Laica sits in the normal layout flow above the welcome card
+  // (same overlap as desktop) instead of being absolutely positioned.
+  welcomeWrapperCompact: {
+    marginTop: 0,
+  },
+
+  welcomeMascotCompact: {
+    position: "relative",
+    top: 0,
+    marginBottom: -20,
+  },
+
+  welcomeSectionCompact: {
+    paddingVertical: 24,
+    paddingHorizontal: 20,
+  },
+
+  welcomeTitleCompact: {
+    fontSize: 25,
+    lineHeight: 32,
+  },
+
+  welcomeDecorationCompact: {
+    width: 84,
+    height: 80,
+    borderRadius: 30,
+  },
+
+  gridCompact: {
+    flexDirection: "column",
+  },
+
+  cardCompact: {
+    flex: 0,
+    minHeight: 170,
   },
 
   questsButton: {
