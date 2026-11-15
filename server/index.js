@@ -1,14 +1,18 @@
 
-import express from "express";
+import { GoogleGenAI } from "@google/genai";
 import cors from "cors";
 import dotenv from "dotenv";
-import multer from "multer";
-import mammoth from "mammoth";
-import JSZip from "jszip";
-import sharp from "sharp";
-import { GoogleGenAI } from "@google/genai";
+import express from "express";
 import { auth } from "express-oauth2-jwt-bearer";
+import JSZip from "jszip";
+import mammoth from "mammoth";
+import multer from "multer";
+import sharp from "sharp";
+import { createAuth0Client } from "./auth0Client.js";
+import { createCampusRouter } from "./campus.js";
+import { createAccessService } from "./campusAccess.js";
 import { pool } from "./db.js";
+import { createProfileRouter } from "./profile.js";
 import { createShopRouter } from "./shop.js";
 import { getOrCreateUserWallet, getPawBalance } from "./solana.js";
 
@@ -51,6 +55,31 @@ const requireAuth = auth({
 // =========================================================
 
 app.use("/api/shop", createShopRouter({ requireAuth }));
+
+// =========================================================
+// PROFILE (USERNAME) + CAMPUS (VERIFIED UPT STUDENTS ONLY)
+// =========================================================
+
+// AUTH0_PASSWORDLESS_CLIENT_ID enables "verify your UPT email with a code".
+// Without it, Campus still works for accounts whose own Auth0 email is a
+// verified @student.upt.ro address.
+const auth0Client = createAuth0Client({
+  domain: process.env.AUTH0_DOMAIN,
+  passwordlessClientId: process.env.AUTH0_PASSWORDLESS_CLIENT_ID || null,
+  passwordlessClientSecret: process.env.AUTH0_PASSWORDLESS_CLIENT_SECRET || null,
+});
+
+const campusAccess = createAccessService({ pool, auth0: auth0Client });
+
+app.use(
+  "/api/me",
+  createProfileRouter({ requireAuth, pool, auth0: auth0Client, access: campusAccess })
+);
+
+app.use(
+  "/api/campus",
+  createCampusRouter({ requireAuth, pool, access: campusAccess })
+);
 
 // =========================================================
 // GEMINI CONFIGURATION
@@ -1067,13 +1096,34 @@ app.post(
       console.log("Wallet Solana:", walletAddress);
       console.log("Sold PAW:", pawBalance);
 
+      // Re-check the Auth0 email after every login so Campus access follows
+      // the account's current, verified email. A failure here must not block
+      // signing in.
+      let campusState = null;
+
+      try {
+        campusState = await campusAccess.resolve(auth0Id, req.auth?.token, { force: true });
+      } catch (error) {
+        console.error("Campus access check during sync failed:", error.message);
+        campusState = await campusAccess.resolve(auth0Id, null).catch(() => null);
+      }
+
+      const username = campusState?.user?.username ?? null;
+
       return res.json({
         success: true,
         message: "Utilizator sincronizat cu TigerData!",
         user: {
           ...user,
+          username,
+          needsUsername: !username,
           solana_wallet_address: walletAddress,
         },
+        campus: campusState
+          ? campusAccess.describe(campusState, {
+              verificationAvailable: auth0Client.isPasswordlessConfigured,
+            })
+          : null,
         wallet: {
           address: walletAddress,
           pawBalance,

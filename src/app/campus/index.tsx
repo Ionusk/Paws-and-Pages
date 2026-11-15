@@ -1,127 +1,333 @@
+import { router, useFocusEffect } from 'expo-router';
+import { BookUp, LibraryBig, Search, X } from 'lucide-react-native';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-    ArrowLeftRight,
-    BookUp,
-    History,
-    LibraryBig,
-    Search,
-    ShieldCheck,
-} from 'lucide-react-native';
-import { StyleSheet, Text, View } from 'react-native';
-import { useAuth0 } from 'react-native-auth0';
+    ActivityIndicator,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Switch,
+    Text,
+    TextInput,
+    useWindowDimensions,
+    View,
+} from 'react-native';
 
-import { ComingSoonScreen } from '@/components/ui/ComingSoonScreen';
-import { FONT, PALETTE } from '@/constants/palette';
+import { CampusBookCard, cardWidth } from '@/components/campus/CampusBookCard';
+import { CampusShell, PublishButton } from '@/components/campus/CampusShell';
+import { Notice, StateCard } from '@/components/ui/feedback';
+import { COMPACT_BREAKPOINT, FONT, PALETTE } from '@/constants/palette';
+import { getErrorMessage } from '@/lib/api';
+import { CAMPUS_CATEGORIES, useCampusApi, type CampusBook } from '@/lib/campusApi';
+import { useProfile } from '@/lib/profile';
 
-// Campus Books needs UPT student verification plus listing and loan
-// endpoints. None of these exist in the backend yet, so the screen shows the
-// access rules and planned features without simulating them.
-export default function CampusScreen() {
-  const { user } = useAuth0();
+export default function CampusHomeScreen() {
+  const { width } = useWindowDimensions();
+  const campus = useCampusApi();
+  const { user } = useProfile();
 
-  return (
-    <ComingSoonScreen
-      eyebrow="THE CAMPUS BOOK CORNER"
-      title="Books bring us together."
-      subtitle="Borrow a book, share one with another student and discover your next read."
-      heroIcon={LibraryBig}
-      heroTitle="A library made by students"
-      heroText="Campus Books isn't open yet. It will let verified UPT students lend and borrow books from each other."
-      heroColor={PALETTE.sage}
-      features={[
-        {
-          icon: Search,
-          title: 'Browse available books',
-          description: 'Discover books offered by other UPT students.',
-          color: PALETTE.lavender,
-          iconColor: PALETTE.purple,
-        },
-        {
-          icon: BookUp,
-          title: 'Share a book',
-          description: 'Publish books you are happy to lend.',
-        },
-        {
-          icon: ArrowLeftRight,
-          title: 'Request and manage loans',
-          description: 'Ask to borrow a book and accept or decline requests.',
-          color: PALETTE.peach,
-          iconColor: '#A77C6C',
-        },
-        {
-          icon: History,
-          title: 'Active and past loans',
-          description: 'Keep track of what you borrowed and lent.',
-          color: PALETTE.sage,
-          iconColor: PALETTE.sageDark,
-        },
-      ]}
-      note={{
-        title: 'A safe student community ♡',
-        text: 'Personal contact details and meeting arrangements will stay private until a borrowing request is accepted.',
-      }}
-    >
-      <View style={styles.accessCard}>
-        <View style={styles.accessIcon}>
-          <ShieldCheck size={22} color={PALETTE.sageDark} />
-        </View>
+  const [query, setQuery] = useState('');
+  const [search, setSearch] = useState('');
+  const [category, setCategory] = useState<string | null>(null);
+  const [availableOnly, setAvailableOnly] = useState(true);
 
-        <View style={styles.accessText}>
-          <Text style={styles.accessTitle}>Who can join</Text>
-          <Text style={styles.accessDescription}>
-            Only users with a verified UPT student account will have access.
-            Student verification isn’t available yet, so no account can be
-            verified at the moment.
+  const [books, setBooks] = useState<CampusBook[]>([]);
+  const [hasMore, setHasMore] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const requestId = useRef(0);
+
+  // Debounce typing in the search box.
+  useEffect(() => {
+    const timer = setTimeout(() => setSearch(query.trim()), 350);
+    return () => clearTimeout(timer);
+  }, [query]);
+
+  const load = useCallback(
+    async (mode: 'replace' | 'more' | 'refresh', offset = 0) => {
+      const id = ++requestId.current;
+
+      if (mode === 'more') setLoadingMore(true);
+      else if (mode === 'refresh') setRefreshing(true);
+      else setLoading(true);
+
+      try {
+        const data = await campus.listBooks({
+          q: search,
+          category,
+          availability: availableOnly ? 'available' : 'all',
+          offset,
+        });
+
+        if (id !== requestId.current) return;
+
+        setBooks((previous) => (mode === 'more' ? [...previous, ...data.books] : data.books));
+        setHasMore(data.hasMore);
+        setLoaded(true);
+        setError(null);
+      } catch (err) {
+        if (id === requestId.current) {
+          setError(getErrorMessage(err, "We couldn't load the campus library."));
+        }
+      } finally {
+        if (id === requestId.current) {
+          setLoading(false);
+          setLoadingMore(false);
+          setRefreshing(false);
+        }
+      }
+    },
+    [availableOnly, campus, category, search]
+  );
+
+  useFocusEffect(
+    useCallback(() => {
+      load('replace');
+    }, [load])
+  );
+
+  const filtersActive = Boolean(search || category) || !availableOnly;
+
+  const renderResults = () => {
+    if (!loaded && (loading || error)) {
+      return (
+        <StateCard
+          loading={loading}
+          loadingText="Looking through the campus shelves..."
+          error={error}
+          onRetry={() => load('replace')}
+        />
+      );
+    }
+
+    if (books.length === 0) {
+      return (
+        <View style={styles.empty}>
+          <View style={styles.emptyIcon}>
+            <LibraryBig size={28} color={PALETTE.purple} />
+          </View>
+          <Text style={styles.emptyTitle}>
+            {filtersActive ? 'No books match your search' : 'The campus shelves are empty'}
+          </Text>
+          <Text style={styles.emptyText}>
+            {filtersActive
+              ? 'Try another title, author or category.'
+              : 'Be the first to share a book with other UPT students.'}
           </Text>
 
-          {user?.email ? (
-            <Text style={styles.accessStatus}>
-              Signed in as {user.email} · not verified
-            </Text>
-          ) : null}
+          {filtersActive ? (
+            <Pressable
+              onPress={() => {
+                setQuery('');
+                setCategory(null);
+                setAvailableOnly(true);
+              }}
+              style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}
+              accessibilityRole="button"
+            >
+              <Text style={styles.secondaryText}>Clear filters</Text>
+            </Pressable>
+          ) : (
+            <Pressable
+              onPress={() => router.push('/campus/publish')}
+              style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}
+              accessibilityRole="button"
+            >
+              <BookUp size={17} color={PALETTE.white} />
+              <Text style={styles.primaryText}>Share a book</Text>
+            </Pressable>
+          )}
         </View>
+      );
+    }
+
+    return (
+      <>
+        {error ? (
+          <Notice tone="error" message={error} actionLabel="Try again" onAction={() => load('replace')} style={styles.notice} />
+        ) : null}
+
+        <View style={styles.grid}>
+          {books.map((book) => (
+            <CampusBookCard key={book.id} book={book} width={cardWidth(width)} />
+          ))}
+        </View>
+
+        {hasMore && (
+          <Pressable
+            onPress={() => load('more', books.length)}
+            disabled={loadingMore}
+            style={({ pressed }) => [styles.secondaryButton, styles.moreButton, pressed && styles.pressed]}
+            accessibilityRole="button"
+          >
+            {loadingMore ? <ActivityIndicator color={PALETTE.text} /> : null}
+            <Text style={styles.secondaryText}>{loadingMore ? 'Loading...' : 'Show more books'}</Text>
+          </Pressable>
+        )}
+      </>
+    );
+  };
+
+  return (
+    <CampusShell
+      title="Books bring us together."
+      subtitle={`Hi ${user?.username ?? 'there'}! Borrow a book from another UPT student, or share one of yours.`}
+      action={<PublishButton compact={width < COMPACT_BREAKPOINT} />}
+      refreshing={refreshing}
+      onRefresh={() => load('refresh')}
+    >
+      <View style={styles.searchBox}>
+        <Search size={17} color={PALETTE.muted} />
+        <TextInput
+          style={styles.searchInput}
+          value={query}
+          onChangeText={setQuery}
+          placeholder="Search by title or author"
+          placeholderTextColor="#A99AAF"
+          returnKeyType="search"
+          maxLength={100}
+          accessibilityLabel="Search books"
+        />
+        {query !== '' && (
+          <Pressable onPress={() => setQuery('')} hitSlop={10} accessibilityRole="button" accessibilityLabel="Clear search">
+            <X size={16} color={PALETTE.muted} />
+          </Pressable>
+        )}
       </View>
-    </ComingSoonScreen>
+
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
+        {[null, ...CAMPUS_CATEGORIES].map((item) => {
+          const selected = category === item;
+
+          return (
+            <Pressable
+              key={item ?? 'all'}
+              onPress={() => setCategory(item)}
+              style={[styles.chip, selected && styles.chipActive]}
+              accessibilityRole="button"
+              accessibilityState={{ selected }}
+            >
+              <Text style={[styles.chipText, selected && styles.chipTextActive]}>{item ?? 'All subjects'}</Text>
+            </Pressable>
+          );
+        })}
+      </ScrollView>
+
+      <View style={styles.toggleRow}>
+        <Text style={styles.toggleLabel}>Only show books I can borrow now</Text>
+        <Switch
+          value={availableOnly}
+          onValueChange={setAvailableOnly}
+          trackColor={{ false: '#E3D8EA', true: PALETTE.darkPink }}
+          thumbColor={PALETTE.white}
+          accessibilityLabel="Only show available books"
+        />
+      </View>
+
+      {loading && loaded ? <ActivityIndicator color={PALETTE.purple} style={styles.inlineLoader} /> : null}
+
+      {renderResults()}
+    </CampusShell>
   );
 }
 
 const styles = StyleSheet.create({
-  accessCard: {
+  searchBox: {
     flexDirection: 'row',
-    gap: 14,
+    alignItems: 'center',
+    gap: 10,
     backgroundColor: PALETTE.white,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: PALETTE.border,
+    paddingHorizontal: 15,
+    minHeight: 48,
+  },
+  searchInput: {
+    flex: 1,
+    color: PALETTE.text,
+    fontSize: 14,
+    fontFamily: FONT.bodyMedium,
+    paddingVertical: 12,
+    outlineStyle: 'none',
+  } as any,
+  chips: { gap: 8, paddingVertical: 14 },
+  chip: {
+    minHeight: 36,
+    justifyContent: 'center',
+    paddingHorizontal: 14,
     borderRadius: 20,
-    padding: 18,
-    marginTop: 18,
+    backgroundColor: PALETTE.white,
     borderWidth: 1,
     borderColor: PALETTE.border,
   },
-  accessIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 15,
-    backgroundColor: PALETTE.sage,
+  chipActive: { backgroundColor: PALETTE.purple, borderColor: PALETTE.purple },
+  chipText: { color: PALETTE.text, fontSize: 12, fontFamily: FONT.bodyBold },
+  chipTextActive: { color: PALETTE.white },
+  toggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginBottom: 16,
+  },
+  toggleLabel: { flex: 1, color: PALETTE.muted, fontSize: 12, fontFamily: FONT.bodyBold },
+  inlineLoader: { marginBottom: 12 },
+  notice: { marginBottom: 14 },
+  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 16 },
+  empty: {
+    backgroundColor: PALETTE.white,
+    borderRadius: 24,
+    padding: 28,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: PALETTE.border,
+  },
+  emptyIcon: {
+    width: 60,
+    height: 60,
+    borderRadius: 20,
+    backgroundColor: PALETTE.lavender,
     alignItems: 'center',
     justifyContent: 'center',
+    marginBottom: 12,
   },
-  accessText: {
-    flex: 1,
-  },
-  accessTitle: {
-    color: PALETTE.text,
-    fontSize: 14,
-    fontFamily: FONT.bodyExtraBold,
-  },
-  accessDescription: {
+  emptyTitle: { color: PALETTE.text, fontSize: 19, fontFamily: FONT.heading, textAlign: 'center' },
+  emptyText: {
     color: PALETTE.muted,
     fontSize: 12,
     lineHeight: 18,
     fontFamily: FONT.body,
-    marginTop: 4,
+    textAlign: 'center',
+    marginTop: 6,
+    maxWidth: 360,
   },
-  accessStatus: {
-    color: PALETTE.darkPink,
-    fontSize: 11,
-    fontFamily: FONT.bodyBold,
-    marginTop: 8,
+  primaryButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 9,
+    minHeight: 46,
+    paddingHorizontal: 20,
+    borderRadius: 15,
+    backgroundColor: PALETTE.text,
+    marginTop: 18,
   },
+  primaryText: { color: PALETTE.white, fontSize: 13, fontFamily: FONT.bodyExtraBold },
+  secondaryButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    minHeight: 44,
+    paddingHorizontal: 18,
+    borderRadius: 15,
+    backgroundColor: PALETTE.lavender,
+    marginTop: 16,
+  },
+  moreButton: { alignSelf: 'center', marginTop: 22 },
+  secondaryText: { color: PALETTE.text, fontSize: 13, fontFamily: FONT.bodyExtraBold },
+  pressed: { opacity: 0.82 },
 });

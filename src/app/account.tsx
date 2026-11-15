@@ -37,6 +37,7 @@ import { useProgressStats } from '@/hooks/useProgressStats';
 import { clearLoginTime, CUSTOM_SCHEME } from '@/lib/authSession';
 import { confirmAction } from '@/lib/feedback';
 import { goBack } from '@/lib/navigation';
+import { useProfile } from '@/lib/profile';
 
 const COLORS = {
   background: '#E9DDF2',
@@ -70,8 +71,9 @@ export default function AccountScreen() {
   const [loggingOut, setLoggingOut] = useState(false);
   const [logoutError, setLogoutError] = useState('');
 
-  const displayName =
-    user?.name || user?.nickname || 'Little reader';
+  const { user: profileUser, campus } = useProfile();
+  const username = profileUser?.username ?? null;
+  const displayName = username ?? 'Little reader';
 
   const handleLogout = async () => {
     if (loggingOut) return;
@@ -337,17 +339,46 @@ export default function AccountScreen() {
             </View>
 
             <View style={styles.detailsCard}>
-              <View style={styles.detailRow}>
+              <Pressable
+                style={({ pressed }) => [styles.detailRow, pressed && styles.pressed]}
+                onPress={() => router.push({ pathname: '/username', params: { mode: 'edit' } })}
+                accessibilityRole="button"
+                accessibilityLabel={`Username ${username ? `@${username}` : 'not set'}. Change username`}
+              >
                 <View style={styles.detailIcon}>
                   <UserRound size={18} color={COLORS.purple} />
                 </View>
                 <View style={styles.detailInfo}>
-                  <Text style={styles.detailLabel}>Full name</Text>
+                  <Text style={styles.detailLabel}>Username · shown to other users</Text>
                   <Text style={styles.detailValue}>
-                    {user?.name || 'Not available'}
+                    {username ? `@${username}` : 'Not chosen yet'}
                   </Text>
                 </View>
-              </View>
+                <Text style={styles.detailAction}>Change</Text>
+                <ChevronRight size={17} color={COLORS.muted} />
+              </Pressable>
+
+              <View style={styles.detailDivider} />
+
+              <Pressable
+                style={({ pressed }) => [styles.detailRow, pressed && styles.pressed]}
+                onPress={() => router.push('/campus')}
+                accessibilityRole="button"
+              >
+                <View style={styles.detailIcon}>
+                  <GraduationCap size={18} color="#758B72" />
+                </View>
+                <View style={styles.detailInfo}>
+                  <Text style={styles.detailLabel}>Campus Books · UPT students</Text>
+                  <Text style={styles.detailValue}>
+                    {campus?.access
+                      ? `Verified${campus.studentEmail ? ` · ${campus.studentEmail}` : ''}`
+                      : 'Not verified'}
+                  </Text>
+                </View>
+                <Text style={styles.detailAction}>{campus?.access ? 'Open' : 'Verify'}</Text>
+                <ChevronRight size={17} color={COLORS.muted} />
+              </Pressable>
 
               <View style={styles.detailDivider} />
 
@@ -815,6 +846,12 @@ const styles = StyleSheet.create({
   detailValue: {
     color: COLORS.text,
     fontSize: 13,
+    fontFamily: 'Nunito_800ExtraBold',
+  },
+
+  detailAction: {
+    color: COLORS.darkPink,
+    fontSize: 12,
     fontFamily: 'Nunito_800ExtraBold',
   },
 

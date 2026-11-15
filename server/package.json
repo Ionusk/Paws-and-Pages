@@ -4,7 +4,9 @@
   "type": "module",
   "scripts": {
     "start": "node index.js",
-    "dev": "nodemon index.js"
+    "dev": "nodemon index.js",
+    "migrate": "node run-migration.js",
+    "test": "node --test --test-concurrency=1 tests/"
   },
   "dependencies": {
     "@coinbase/cdp-sdk": "^1.62.0",

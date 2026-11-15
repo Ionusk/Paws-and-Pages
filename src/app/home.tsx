@@ -26,11 +26,11 @@ import {
     useWindowDimensions,
     View,
 } from "react-native";
-import { useAuth0 } from "react-native-auth0";
 
 import { SoonBadge } from "@/components/ui/feedback";
 import { COMPACT_BREAKPOINT } from "@/constants/palette";
 import { useProgressStats } from "@/hooks/useProgressStats";
+import { useProfile } from "@/lib/profile";
 import { AnimatedMascot } from "../components/AnimatedMascot";
 import { usePawWallet } from "../hooks/usePawWallet";
 
@@ -60,7 +60,7 @@ export default function HomeScreen() {
   const isCompact = width < COMPACT_BREAKPOINT;
   const isMedium = width < 900;
 
-  const { user } = useAuth0();
+  const profile = useProfile();
   const {
     balance,
     loading: walletLoading,
@@ -68,10 +68,9 @@ export default function HomeScreen() {
   } = usePawWallet();
   const { stats, loading: statsLoading } = useProgressStats();
 
-  // Auth0 often uses the email as "name"; prefer a real name when there is one.
-  const rawName =
-    user?.name && !user.name.includes("@") ? user.name : user?.nickname;
-  const firstName = (rawName || "").split(" ")[0];
+  // Greet by username only; the email address is never shown here.
+  const firstName = profile.user?.username ?? "";
+  const hasCampusAccess = Boolean(profile.campus?.access);
 
   const balanceText = walletLoading
     ? "..."
@@ -370,24 +369,36 @@ export default function HomeScreen() {
             ]}
             onPress={() => router.push("/campus")}
             accessibilityRole="button"
-            accessibilityLabel="Campus Books. Coming soon for verified UPT students."
+            accessibilityLabel={
+              hasCampusAccess
+                ? "Campus Books. Borrow and lend books with other UPT students."
+                : "Campus Books. For verified UPT students. Verify your student email."
+            }
           >
             <View style={styles.secondaryCardTop}>
               <View style={styles.secondaryIcon}>
                 <LibraryBig size={25} color="#A77C6C" strokeWidth={1.7} />
               </View>
-              <SoonBadge />
+              {hasCampusAccess ? (
+                <ArrowUpRight size={22} color={COLORS.muted} strokeWidth={1.6} />
+              ) : (
+                <SoonBadge label="UPT STUDENTS" />
+              )}
             </View>
 
             <View>
               <Text style={styles.secondaryTitle}>Campus Books</Text>
               <Text style={styles.secondaryDescription}>
-                Discover and exchange.
+                {hasCampusAccess
+                  ? "Borrow and lend books with other students."
+                  : "Verify your @student.upt.ro email to join."}
               </Text>
             </View>
 
             <View style={styles.secondaryCardBottom}>
-              <Text style={styles.secondaryLink}>SEE WHAT’S PLANNED</Text>
+              <Text style={styles.secondaryLink}>
+                {hasCampusAccess ? "OPEN CAMPUS" : "VERIFY TO UNLOCK"}
+              </Text>
               <ArrowRight size={17} color={COLORS.text} strokeWidth={1.7} />
             </View>
           </Pressable>
