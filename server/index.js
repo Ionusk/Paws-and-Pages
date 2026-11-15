@@ -10,6 +10,7 @@ import { GoogleGenAI } from "@google/genai";
 import { auth } from "express-oauth2-jwt-bearer";
 import { pool } from "./db.js";
 import { createQuestsRouter } from "./quests.js";
+import { createStudyAudioRouter } from "./studyAudio.js";
 
 dotenv.config();
 
@@ -50,6 +51,12 @@ const requireAuth = auth({
 // =========================================================
 
 app.use("/api/quests", createQuestsRouter({ requireAuth }));
+
+// =========================================================
+// AUDIO LESSONS + STUDY TUTOR (ElevenLabs)
+// =========================================================
+
+app.use(createStudyAudioRouter({ requireAuth }));
 
 // =========================================================
 // SOLANA (OPTIONAL) - WALLET + SHOP PAW TOKEN

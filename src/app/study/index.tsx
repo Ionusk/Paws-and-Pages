@@ -9,6 +9,7 @@ import {
     GraduationCap,
     Headphones,
     LibraryBig,
+    MessageCircleQuestionMark,
     MessagesSquare,
     Mic,
     PawPrint,
@@ -88,13 +89,20 @@ const tools: StudyTool[] = [
     icon: Brain,
   },
   {
-    // There is no audio backend yet, so this tile is informational only.
     title: 'Audio lessons',
-    subtitle: 'Listen to your study materials whenever you want.',
+    subtitle: 'Listen to your summaries, read aloud by Laica.',
     description: 'LEARN ON THE GO',
-    route: null,
+    route: '/study/audio',
     color: COLORS.peach,
     icon: Headphones,
+  },
+  {
+    title: 'Ask about a lesson',
+    subtitle: 'Talk with the study tutor about one of your summaries.',
+    description: 'VOICE STUDY TUTOR',
+    route: '/study/tutor',
+    color: COLORS.sage,
+    icon: MessageCircleQuestionMark,
   },
   {
     title: 'Talk with Laica',

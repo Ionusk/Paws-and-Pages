@@ -77,6 +77,8 @@ const PROTECTED_SCREENS = [
   "study/quiz",
   "study/summary",
   "study/voice",
+  "study/audio",
+  "study/tutor",
   "study/conversations",
   "study/conversation/[id]",
 ];
