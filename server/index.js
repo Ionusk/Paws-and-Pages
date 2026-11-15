@@ -12,7 +12,9 @@ import { createAuth0Client } from "./auth0Client.js";
 import { createCampusRouter } from "./campus.js";
 import { createAccessService } from "./campusAccess.js";
 import { pool } from "./db.js";
+import { createFriendsRouter } from "./friends.js";
 import { createProfileRouter } from "./profile.js";
+import { createReviewsRouter } from "./reviews.js";
 import { createQuestsRouter } from "./quests.js";
 import { createStudyAudioRouter } from "./studyAudio.js";
 
@@ -241,6 +243,18 @@ app.use(
   "/api/campus",
   createCampusRouter({ requireAuth, pool, access: campusAccess })
 );
+
+// =========================================================
+// BOOK REVIEWS (finished books only)
+// =========================================================
+
+app.use("/api/reading/reviews", createReviewsRouter({ requireAuth, pool }));
+
+// =========================================================
+// FRIENDS (requests, activity feed, shared reviews)
+// =========================================================
+
+app.use("/api/friends", createFriendsRouter({ requireAuth, pool }));
 
 // =========================================================
 // GEMINI CONFIGURATION

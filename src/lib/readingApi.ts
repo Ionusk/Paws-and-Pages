@@ -227,3 +227,90 @@ export async function saveReadingSession(
     }
   );
 }
+
+// =========================================================
+// BOOK REVIEWS
+// =========================================================
+
+export const REVIEW_MAX_LENGTH = 4000;
+
+/** The book fields the reviews endpoints return. */
+export type ReviewedBook = {
+  id: string;
+  title: string;
+  author: string;
+  pages: number;
+  status: BookStatus;
+  finishedAt: string | null;
+  coverUrl: string | null;
+};
+
+export type BookReview = {
+  id: number;
+  bookId: string;
+  /** 1 to 5 stars. */
+  rating: number;
+  body: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type BookReviewWithBook = BookReview & { book: ReviewedBook };
+
+export type ReviewsOverview = {
+  reviews: BookReviewWithBook[];
+  /** Finished books that don't have a review yet. */
+  awaiting: ReviewedBook[];
+};
+
+export type BookReviewDetails = {
+  book: ReviewedBook;
+  review: BookReview | null;
+  /** False while the book isn't finished and has no review yet. */
+  canReview: boolean;
+};
+
+const reviewPath = (bookId: string) =>
+  `/api/reading/reviews/${encodeURIComponent(bookId)}`;
+
+export async function getReviews(accessToken: string): Promise<ReviewsOverview> {
+  const data = await apiRequest<Partial<ReviewsOverview>>(
+    '/api/reading/reviews',
+    accessToken
+  );
+
+  return {
+    reviews: Array.isArray(data.reviews) ? data.reviews : [],
+    awaiting: Array.isArray(data.awaiting) ? data.awaiting : [],
+  };
+}
+
+export async function getReview(
+  bookId: string,
+  accessToken: string
+): Promise<BookReviewDetails> {
+  return apiRequest<BookReviewDetails>(reviewPath(bookId), accessToken);
+}
+
+/** Create or update the review of a finished book. */
+export async function saveReview(
+  bookId: string,
+  review: { rating: number; body: string },
+  accessToken: string
+): Promise<{ book: ReviewedBook; review: BookReview }> {
+  return apiRequest<{ book: ReviewedBook; review: BookReview }>(
+    reviewPath(bookId),
+    accessToken,
+    {
+      method: 'PUT',
+      body: JSON.stringify(review),
+    }
+  );
+}
+
+export async function deleteReview(
+  bookId: string,
+  accessToken: string
+): Promise<void> {
+  await apiRequest(reviewPath(bookId), accessToken, { method: 'DELETE' });
+}

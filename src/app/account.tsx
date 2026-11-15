@@ -31,7 +31,7 @@ import {
 } from 'react-native';
 import { useAuth0 } from 'react-native-auth0';
 
-import { Notice, SoonBadge } from '@/components/ui/feedback';
+import { Notice } from '@/components/ui/feedback';
 import { COMPACT_BREAKPOINT } from '@/constants/palette';
 import { useProgressStats } from '@/hooks/useProgressStats';
 import { clearLoginTime, CUSTOM_SCHEME } from '@/lib/authSession';
@@ -312,7 +312,12 @@ export default function AccountScreen() {
               <Text style={styles.sectionLabel}>CONNECT</Text>
             </View>
 
-            <View style={styles.communityCard}>
+            <Pressable
+              style={({ pressed }) => [styles.communityCard, pressed && styles.pressed]}
+              onPress={() => router.push('/friends')}
+              accessibilityRole="button"
+              accessibilityLabel="Friends and connections"
+            >
               <View style={styles.communityIcon}>
                 <UsersRound size={25} color={COLORS.darkPink} />
               </View>
@@ -320,13 +325,12 @@ export default function AccountScreen() {
               <View style={styles.communityInfo}>
                 <Text style={styles.communityTitle}>Friends & connections</Text>
                 <Text style={styles.communityDescription}>
-                  Friends, shared books and community activity are not
-                  available yet.
+                  Add friends, follow their reading and read their reviews.
                 </Text>
               </View>
 
-              <SoonBadge />
-            </View>
+              <ChevronRight size={17} color={COLORS.muted} />
+            </Pressable>
           </View>
 
           {/* Account information */}

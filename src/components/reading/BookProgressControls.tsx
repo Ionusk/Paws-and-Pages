@@ -1,23 +1,23 @@
 import { router } from 'expo-router';
-import { Check, CheckCircle2, PencilLine, RotateCcw, Timer, X } from 'lucide-react-native';
+import { Check, CheckCircle2, PencilLine, RotateCcw, Star, Timer, X } from 'lucide-react-native';
 import { useState } from 'react';
 import {
-  ActivityIndicator,
-  Pressable,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
+    ActivityIndicator,
+    Pressable,
+    StyleSheet,
+    Text,
+    TextInput,
+    View,
 } from 'react-native';
 
 import { FONT, PALETTE } from '@/constants/palette';
 import { getErrorMessage, useApi } from '@/lib/api';
 import { confirmAction } from '@/lib/feedback';
 import {
-  isBookFinished,
-  updateReadingBook,
-  type BookProgressChange,
-  type ReadingBook,
+    isBookFinished,
+    updateReadingBook,
+    type BookProgressChange,
+    type ReadingBook,
 } from '@/lib/readingApi';
 
 type Props = {
@@ -52,6 +52,14 @@ export function BookProgressControls({ book, onUpdated }: Props) {
 
       setEditing(false);
       onUpdated(updated);
+
+      // Marking it finished (or saving the last page) asks for a review.
+      if (!finished && isBookFinished(updated)) {
+        router.push({
+          pathname: '/reading/review/[bookId]',
+          params: { bookId: updated.id, justFinished: '1' },
+        });
+      }
     } catch (err) {
       console.error('Book update error:', err);
       setError(getErrorMessage(err, "We couldn't update this book."));
@@ -90,6 +98,22 @@ export function BookProgressControls({ book, onUpdated }: Props) {
     return (
       <View style={styles.wrap}>
         <View style={styles.row}>
+          <Pressable
+            onPress={() =>
+              router.push({
+                pathname: '/reading/review/[bookId]',
+                params: { bookId: book.id },
+              })
+            }
+            disabled={saving}
+            style={({ pressed }) => [styles.primary, pressed && styles.pressed]}
+            accessibilityRole="button"
+            accessibilityLabel={`Review ${book.title}`}
+          >
+            <Star size={14} color={PALETTE.white} />
+            <Text style={styles.primaryText}>Review</Text>
+          </Pressable>
+
           <Pressable
             onPress={() => save({ status: 'reading' })}
             disabled={saving}

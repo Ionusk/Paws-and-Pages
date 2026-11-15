@@ -1,32 +1,33 @@
 import { router } from 'expo-router';
 import {
-  ArrowLeft,
-  ArrowRight,
-  BookMarked,
-  BookOpen,
-  BookPlus,
-  CheckCircle2,
-  LibraryBig,
-  NotebookPen,
-  PencilLine,
-  Search,
-  Timer,
+    ArrowLeft,
+    ArrowRight,
+    BookMarked,
+    BookOpen,
+    BookPlus,
+    CheckCircle2,
+    LibraryBig,
+    NotebookPen,
+    PencilLine,
+    Search,
+    Star,
+    Timer,
 } from 'lucide-react-native';
 import {
-  Image,
-  Pressable,
-  SafeAreaView,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  useWindowDimensions,
-  View,
+    Image,
+    Pressable,
+    SafeAreaView,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    useWindowDimensions,
+    View,
 } from 'react-native';
 
 import { BookCard } from '@/components/reading/BookCard';
 import { BookProgressControls } from '@/components/reading/BookProgressControls';
-import { SoonBadge, StateCard } from '@/components/ui/feedback';
+import { StateCard } from '@/components/ui/feedback';
 import { COMPACT_BREAKPOINT } from '@/constants/palette';
 import { useReadingBooks } from '@/hooks/useReadingBooks';
 import { goBack } from '@/lib/navigation';
@@ -198,11 +199,17 @@ export default function ReadingScreen() {
           contentContainerStyle={styles.finishedRow}
         >
           {finishedBooks.slice(0, MAX_FINISHED_PREVIEW).map((book) => (
-            <View
+            <Pressable
               key={book.id}
-              style={styles.finishedItem}
-              accessible
-              accessibilityLabel={`${book.title} by ${book.author}, finished`}
+              onPress={() =>
+                router.push({
+                  pathname: '/reading/review/[bookId]',
+                  params: { bookId: book.id },
+                })
+              }
+              style={({ pressed }) => [styles.finishedItem, pressed && styles.pressed]}
+              accessibilityRole="button"
+              accessibilityLabel={`${book.title} by ${book.author}, finished. Open its review.`}
             >
               <View style={styles.finishedCover}>
                 {book.coverUrl ? (
@@ -224,7 +231,11 @@ export default function ReadingScreen() {
               <Text style={styles.finishedAuthor} numberOfLines={1}>
                 {book.author}
               </Text>
-            </View>
+              <View style={styles.finishedReview}>
+                <Star size={11} color={COLORS.accent} />
+                <Text style={styles.finishedReviewText}>Review</Text>
+              </View>
+            </Pressable>
           ))}
         </ScrollView>
 
@@ -437,7 +448,7 @@ export default function ReadingScreen() {
           style={styles.activityCard}
           onPress={() => router.push('/reading/review')}
           accessibilityRole="button"
-          accessibilityLabel="Book reviews. Coming soon."
+          accessibilityLabel="Book reviews"
         >
           <View style={styles.activityIcon}>
             <NotebookPen size={23} color={COLORS.accent} />
@@ -446,11 +457,11 @@ export default function ReadingScreen() {
           <View style={styles.activityText}>
             <Text style={styles.activityTitle}>Book reviews</Text>
             <Text style={styles.activityDescription}>
-              Save your thoughts about the books you read.
+              Rate the books you finish and keep your thoughts in one place.
             </Text>
           </View>
 
-          <SoonBadge />
+          <ArrowRight size={18} color={COLORS.dark} />
         </TouchableOpacity>
 
         <View style={styles.footer}>
@@ -763,6 +774,17 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontFamily: 'Nunito_600SemiBold',
     marginTop: 2,
+  },
+  finishedReview: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 5,
+  },
+  finishedReviewText: {
+    color: COLORS.accent,
+    fontSize: 10,
+    fontFamily: 'Nunito_800ExtraBold',
   },
   finishedLink: {
     flexDirection: 'row',

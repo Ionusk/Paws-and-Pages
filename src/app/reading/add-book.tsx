@@ -1,28 +1,28 @@
 import * as ImagePicker from 'expo-image-picker';
-import { useLocalSearchParams } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import {
-  ArrowLeft,
-  BookOpen,
-  BookPlus,
-  CheckCircle2,
-  ImagePlus,
-  PencilLine,
-  Search,
-  X,
+    ArrowLeft,
+    BookOpen,
+    BookPlus,
+    CheckCircle2,
+    ImagePlus,
+    PencilLine,
+    Search,
+    X,
 } from 'lucide-react-native';
 import { useEffect, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
-  Image,
-  Pressable,
-  SafeAreaView,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  useWindowDimensions,
-  View,
+    ActivityIndicator,
+    Image,
+    Pressable,
+    SafeAreaView,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    useWindowDimensions,
+    View,
 } from 'react-native';
 
 import { Notice } from '@/components/ui/feedback';
@@ -30,11 +30,12 @@ import { COMPACT_BREAKPOINT } from '@/constants/palette';
 import { getErrorMessage, useApi } from '@/lib/api';
 import { goBack } from '@/lib/navigation';
 import {
-  addReadingBook,
-  searchOpenLibrary,
-  type BookStatus,
-  type CoverUpload,
-  type OpenLibraryBook,
+    addReadingBook,
+    isBookFinished,
+    searchOpenLibrary,
+    type BookStatus,
+    type CoverUpload,
+    type OpenLibraryBook,
 } from '@/lib/readingApi';
 
 const COLORS = {
@@ -248,7 +249,7 @@ export default function AddBookScreen() {
     try {
       setSaving(true);
 
-      await addReadingBook(
+      const added = await addReadingBook(
         {
           title: trimmedTitle,
           author: author.trim() || 'Unknown author',
@@ -261,6 +262,15 @@ export default function AddBookScreen() {
         await getAccessToken(),
         mode === 'manual' ? cover : null
       );
+
+      if (added && isBookFinished(added)) {
+        // An already-finished book: ask how it was right away.
+        router.replace({
+          pathname: '/reading/review/[bookId]',
+          params: { bookId: added.id, justFinished: '1' },
+        });
+        return;
+      }
 
       // The reading screen reloads its books when it regains focus.
       goBack('/reading');

@@ -338,24 +338,24 @@ export default function HomeScreen() {
             ]}
             onPress={() => router.push("/friends")}
             accessibilityRole="button"
-            accessibilityLabel="Friends. Coming soon."
+            accessibilityLabel="Friends. See what your friends are reading."
           >
             <View style={styles.secondaryCardTop}>
               <View style={styles.secondaryIcon}>
                 <UsersRound size={25} color="#71866F" strokeWidth={1.7} />
               </View>
-              <SoonBadge />
+              <ArrowUpRight size={22} color={COLORS.muted} strokeWidth={1.6} />
             </View>
 
             <View>
               <Text style={styles.secondaryTitle}>Friends</Text>
               <Text style={styles.secondaryDescription}>
-                Share your journey.
+                See what your friends are reading and cheer them on.
               </Text>
             </View>
 
             <View style={styles.secondaryCardBottom}>
-              <Text style={styles.secondaryLink}>SEE WHAT’S PLANNED</Text>
+              <Text style={styles.secondaryLink}>SEE YOUR FRIENDS</Text>
               <ArrowRight size={17} color={COLORS.text} strokeWidth={1.7} />
             </View>
           </Pressable>

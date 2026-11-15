@@ -1,28 +1,29 @@
 import { router, useLocalSearchParams } from 'expo-router';
 import {
-  ArrowLeft,
-  BookOpen,
-  BookPlus,
-  Check,
-  CheckCircle2,
-  Circle,
-  Pause,
-  Play,
-  Timer,
+    ArrowLeft,
+    BookOpen,
+    BookPlus,
+    Check,
+    CheckCircle2,
+    Circle,
+    Pause,
+    Play,
+    Star,
+    Timer,
 } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import {
-  ActivityIndicator,
-  Image,
-  Pressable,
-  SafeAreaView,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  useWindowDimensions,
-  View,
+    ActivityIndicator,
+    Image,
+    Pressable,
+    SafeAreaView,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    useWindowDimensions,
+    View,
 } from 'react-native';
 
 import { Notice, StateCard } from '@/components/ui/feedback';
@@ -31,9 +32,9 @@ import { getErrorMessage, useApi } from '@/lib/api';
 import { confirmAction } from '@/lib/feedback';
 import { goBack } from '@/lib/navigation';
 import {
-  isBookFinished,
-  saveReadingSession,
-  type ReadingBook,
+    isBookFinished,
+    saveReadingSession,
+    type ReadingBook,
 } from '@/lib/readingApi';
 
 import { AnimatedMascot } from '../../components/AnimatedMascot';
@@ -176,12 +177,24 @@ export default function ReadingSessionScreen() {
 
       setSavedBook(result.book);
       setSaveState('saved');
+
+      // Finishing the book: ask for a review while the story is fresh.
+      if (result.book && isBookFinished(result.book)) {
+        openReviewFor(result.book.id);
+      }
     } catch (err) {
       console.error('Reading session save error:', err);
 
       setSaveState('error');
       setSaveError(getErrorMessage(err, "We couldn't save this reading session."));
     }
+  };
+
+  const openReviewFor = (bookId: string) => {
+    router.replace({
+      pathname: '/reading/review/[bookId]',
+      params: { bookId, justFinished: '1' },
+    });
   };
 
   const handleBack = async () => {
@@ -335,15 +348,27 @@ export default function ReadingSessionScreen() {
             style={styles.saveNotice}
           />
 
-          <TouchableOpacity
-            style={styles.backHomeButton}
-            activeOpacity={0.85}
-            onPress={() => router.replace('/reading')}
-            accessibilityRole="button"
-          >
-            <BookOpen size={18} color={COLORS.white} />
-            <Text style={styles.backHomeButtonText}>BACK TO MY READING</Text>
-          </TouchableOpacity>
+          {nowFinished ? (
+            <TouchableOpacity
+              style={styles.backHomeButton}
+              activeOpacity={0.85}
+              onPress={() => openReviewFor(savedBook.id)}
+              accessibilityRole="button"
+            >
+              <Star size={18} color={COLORS.white} />
+              <Text style={styles.backHomeButtonText}>WRITE A REVIEW</Text>
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity
+              style={styles.backHomeButton}
+              activeOpacity={0.85}
+              onPress={() => router.replace('/reading')}
+              accessibilityRole="button"
+            >
+              <BookOpen size={18} color={COLORS.white} />
+              <Text style={styles.backHomeButtonText}>BACK TO MY READING</Text>
+            </TouchableOpacity>
+          )}
         </View>
       );
     }
