@@ -72,16 +72,8 @@ export default function ReadingScreen() {
   const progress = Math.min(finishedThisYear / READING_GOAL, 1);
   const percentage = Math.round(progress * 100);
 
+  // Always ask which book to read (the session screen shows the picker).
   const startSession = () => {
-    // With exactly one book in progress there is nothing to choose.
-    if (readingBooks.length === 1) {
-      router.push({
-        pathname: '/reading/session',
-        params: { bookId: readingBooks[0].id },
-      });
-      return;
-    }
-
     router.push('/reading/session');
   };
 

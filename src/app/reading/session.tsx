@@ -77,9 +77,12 @@ export default function ReadingSessionScreen() {
   const readingBooks = books.filter((book) => !isBookFinished(book));
 
   // Opening the screen from a book ("Read now") starts right away.
-  const [selectedId, setSelectedId] = useState<string | null>(
+  const [chosenId, setSelectedId] = useState<string | null>(
     params.bookId ?? null
   );
+  // With one book in progress it's preselected in the picker (still asks).
+  const selectedId =
+    chosenId ?? (readingBooks.length === 1 ? readingBooks[0].id : null);
   const [started, setStarted] = useState(Boolean(params.bookId));
 
   const [elapsedSeconds, setElapsedSeconds] = useState(0);

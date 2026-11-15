@@ -1,5 +1,5 @@
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
-import { router, useLocalSearchParams } from 'expo-router';
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import {
   ArrowLeft,
   AudioLines,
@@ -13,7 +13,7 @@ import {
   RotateCw,
   Sparkles,
 } from 'lucide-react-native';
-import { useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -50,13 +50,17 @@ function LessonPlayer({ url, title }: { url: string; title: string }) {
   const status = useAudioPlayerStatus(player);
   const [speed, setSpeed] = useState(1);
 
-  useEffect(() => {
-    return () => {
-      try {
-        player.pause();
-      } catch {}
-    };
-  }, [player]);
+  // Pause when leaving this page: going back, opening another screen on
+  // top (account, tutor...) or switching tabs. Runs on unmount too.
+  useFocusEffect(
+    useCallback(() => {
+      return () => {
+        try {
+          player.pause();
+        } catch {}
+      };
+    }, [player])
+  );
 
   const duration = status.duration || 0;
   const progress = duration > 0 ? Math.min(status.currentTime / duration, 1) : 0;
