@@ -98,6 +98,7 @@ const SKINS: Skin[] = [
     background: "#F6EAF4",
     accent: "#D6B8E5",
     decoration: "#B78DCC",
+    video: require("../../assets/video/laicaoriginal.webm"),
   },
   {
     id: "hogwarts",
