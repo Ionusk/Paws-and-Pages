@@ -196,6 +196,8 @@ export default function ShopScreen() {
           background: visual.background,
           accent: visual.accent,
           decoration: visual.decoration,
+          // Preview video on the card, so skins can be seen before buying.
+          video: visual.video,
           id: item.id,
           name: item.name,
           description: item.description ?? "",
