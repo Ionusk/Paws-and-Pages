@@ -1,31 +1,32 @@
 
 import { COMPACT_BREAKPOINT } from '@/constants/palette';
 import {
-  CUSTOM_SCHEME,
-  clearLoginTime,
-  consumeLoginReturn,
+    CUSTOM_SCHEME,
+    clearLoginTime,
+    consumeLoginReturn,
 } from '@/lib/authSession';
+import { useProfile } from '@/lib/profile';
 import { useFocusEffect, useRouter } from 'expo-router';
 import {
-  BookOpen,
-  Flower2,
-  GraduationCap,
-  LogOut,
-  PawPrint,
-  Pencil,
-  Sparkles,
+    BookOpen,
+    Flower2,
+    GraduationCap,
+    LogOut,
+    PawPrint,
+    Pencil,
+    Sparkles,
 } from 'lucide-react-native';
 import { useCallback, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
-  Platform,
-  Pressable,
-  SafeAreaView,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-  useWindowDimensions,
+    ActivityIndicator,
+    Platform,
+    Pressable,
+    SafeAreaView,
+    ScrollView,
+    StyleSheet,
+    Text,
+    View,
+    useWindowDimensions,
 } from 'react-native';
 import { useAuth0 } from 'react-native-auth0';
 import { AnimatedMascot } from '../components/AnimatedMascot';
@@ -54,6 +55,7 @@ export default function WelcomeScreen() {
 
   const { user, isLoading, clearSession } = useAuth0();
   const hasUser = Boolean(user);
+  const { user: profileUser } = useProfile();
   const [leaving, setLeaving] = useState(false);
   const [redirecting, setRedirecting] = useState(false);
   // Read the "just logged in" flag once per visit. The effect below can run
@@ -110,7 +112,8 @@ export default function WelcomeScreen() {
     );
   }
 
-  const displayName = user?.name || user?.nickname;
+  // Never greet with the email address; use the username once it's known.
+  const displayName = profileUser?.username ?? null;
 
   const renderTooltip = (
     feature: keyof typeof FEATURES,

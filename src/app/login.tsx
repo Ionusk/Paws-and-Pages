@@ -25,6 +25,7 @@ import {
     markLoginStarted,
 } from "@/lib/authSession";
 import { goBack } from "@/lib/navigation";
+import { useProfile } from "@/lib/profile";
 import { AnimatedMascot } from "../components/AnimatedMascot";
 
 const SESSION_DURATION = 4 * 60 * 60 * 1000;
@@ -52,6 +53,8 @@ export default function LoginScreen() {
     clearSession,
     getCredentials,
   } = useAuth0();
+
+  const { apply: applyProfile } = useProfile();
 
   const [loading, setLoading] = useState(false);
   const [loadingText, setLoadingText] = useState("Getting your paws ready...");
@@ -138,7 +141,7 @@ export default function LoginScreen() {
         if (cancelled) return;
 
         // 2. Save / update the user and their wallet in the backend
-        await apiRequest("/api/auth/sync", credentials.accessToken, {
+        const synced = await apiRequest("/api/auth/sync", credentials.accessToken, {
           method: "POST",
           body: JSON.stringify({
             email: user.email || null,
@@ -149,7 +152,10 @@ export default function LoginScreen() {
         syncedUserRef.current = auth0Id;
 
         if (!cancelled) {
-          router.replace("/home");
+          applyProfile(synced);
+
+          // New accounts (and older ones without a username) pick one first.
+          router.replace(synced?.user?.needsUsername ? "/username" : "/home");
         }
       } catch (error) {
         console.error("Account sync error:", error);

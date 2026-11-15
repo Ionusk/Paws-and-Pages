@@ -1,6 +1,8 @@
 
 import { ConversationProvider } from "@elevenlabs/react-native";
-import { Stack } from "expo-router";
+import { Stack, useRouter, useSegments } from "expo-router";
+
+import { ProfileProvider, useProfile } from "@/lib/profile";
 import { SkinProvider } from "../components/SkinProvider";
 import * as SplashScreen from "expo-splash-screen";
 import { useEffect, useState } from "react";
@@ -8,16 +10,16 @@ import { ActivityIndicator, Platform, Text, View } from "react-native";
 import { Auth0Provider, useAuth0 } from "react-native-auth0";
 
 import {
-  PlayfairDisplay_400Regular,
-  PlayfairDisplay_700Bold,
-  useFonts,
+    PlayfairDisplay_400Regular,
+    PlayfairDisplay_700Bold,
+    useFonts,
 } from "@expo-google-fonts/playfair-display";
 
 import {
-  Nunito_400Regular,
-  Nunito_600SemiBold,
-  Nunito_700Bold,
-  Nunito_800ExtraBold,
+    Nunito_400Regular,
+    Nunito_600SemiBold,
+    Nunito_700Bold,
+    Nunito_800ExtraBold,
 } from "@expo-google-fonts/nunito";
 
 const auth0Domain = process.env.EXPO_PUBLIC_AUTH0_DOMAIN!;
@@ -63,8 +65,9 @@ const PROTECTED_SCREENS = [
   "friends",
   "explore",
   "tabs",
-  "campus/index",
-  "campus/book",
+  "username",
+  // Campus has its own layout that also requires verified UPT student access.
+  "campus",
   "reading/index",
   "reading/library",
   "reading/add-book",
@@ -83,8 +86,14 @@ const PROTECTED_SCREENS = [
   "study/conversation/[id]",
 ];
 
+// Routes a signed-in user may stay on before they have picked a username.
+const USERNAME_EXEMPT_ROUTES = new Set(["", "index", "login", "username"]);
+
 function RootNavigator() {
   const { user, isLoading } = useAuth0();
+  const profile = useProfile();
+  const segments = useSegments();
+  const router = useRouter();
 
   // Wait for the first Auth0 session check only. After that the navigator
   // stays mounted, so later loading flags never reset navigation state.
@@ -93,6 +102,21 @@ function RootNavigator() {
   if (!authReady && !isLoading) {
     setAuthReady(true);
   }
+
+  // Existing accounts without a username are asked to choose one before
+  // using the rest of the app.
+  const firstSegment = String(segments[0] ?? "");
+  const mustChooseUsername =
+    Boolean(user) &&
+    profile.status === "ready" &&
+    Boolean(profile.user?.needsUsername) &&
+    !USERNAME_EXEMPT_ROUTES.has(firstSegment);
+
+  useEffect(() => {
+    if (mustChooseUsername) {
+      router.replace("/username");
+    }
+  }, [mustChooseUsername, router]);
 
   if (!authReady) {
     return (
@@ -187,7 +211,7 @@ export default function RootLayout() {
             ? "EXPO_PUBLIC_AUTH0_WEB_CLIENT_ID"
             : "EXPO_PUBLIC_AUTH0_CLIENT_ID"}{" "}
           in the .env file at the project root, then restart Expo with
-          "npx expo start -c".
+          {" npx expo start -c"}.
         </Text>
       </View>
     );
@@ -205,11 +229,13 @@ export default function RootLayout() {
           }
         : {})}
     >
-      <SkinProvider>
-        <ConversationProvider>
-          <RootNavigator />
-        </ConversationProvider>
-      </SkinProvider>
+      <ProfileProvider>
+        <SkinProvider>
+          <ConversationProvider>
+            <RootNavigator />
+          </ConversationProvider>
+        </SkinProvider>
+      </ProfileProvider>
     </Auth0Provider>
   );
 }
