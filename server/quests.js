@@ -75,9 +75,8 @@ export const QUESTS = [
     progressSql: `SELECT COUNT(*) AS v
       FROM reading_books
       WHERE user_id = $1::text
-        AND total_pages > 0
-        AND current_page >= total_pages
-        AND updated_at >= ${WEEK_START}`,
+        AND status = 'finished'
+        AND finished_at >= ${WEEK_START}`,
   },
   {
     id: "study",

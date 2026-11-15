@@ -1,4 +1,4 @@
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { ArrowLeft, BookPlus, LibraryBig, Search, X } from 'lucide-react-native';
 import { useMemo, useState } from 'react';
 import {
@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 
 import { BookCard } from '@/components/reading/BookCard';
+import { BookProgressControls } from '@/components/reading/BookProgressControls';
 import { Notice, StateCard } from '@/components/ui/feedback';
 import { COMPACT_BREAKPOINT } from '@/constants/palette';
 import { useReadingBooks } from '@/hooks/useReadingBooks';
@@ -45,8 +46,13 @@ export default function LibraryScreen() {
   const isWide = width >= 1000;
 
   const { books, loaded, loading, error, refresh } = useReadingBooks();
+  const params = useLocalSearchParams<{ filter?: string }>();
 
-  const [filter, setFilter] = useState<Filter>('all');
+  const [filter, setFilter] = useState<Filter>(
+    params.filter === 'reading' || params.filter === 'finished'
+      ? params.filter
+      : 'all'
+  );
   const [query, setQuery] = useState('');
 
   const counts = useMemo(
@@ -137,7 +143,9 @@ export default function LibraryScreen() {
             key={book.id}
             style={[styles.gridItem, isWide && styles.gridItemWide]}
           >
-            <BookCard book={book} compact={isCompact || isWide} />
+            <BookCard book={book} compact={isCompact || isWide}>
+              <BookProgressControls book={book} onUpdated={refresh} />
+            </BookCard>
           </View>
         ))}
       </View>
@@ -251,10 +259,6 @@ export default function LibraryScreen() {
         )}
 
         {renderContent()}
-
-        <Text style={styles.footnote}>
-          Updating the current page of a saved book isn’t available yet.
-        </Text>
       </ScrollView>
     </SafeAreaView>
   );

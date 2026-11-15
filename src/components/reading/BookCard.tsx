@@ -21,10 +21,25 @@ const COLORS = {
 type BookCardProps = {
   book: ReadingBook;
   compact?: boolean;
+  /** Extra content under the card, e.g. progress controls. */
+  children?: React.ReactNode;
 };
 
+function formatFinishedDate(iso?: string | null) {
+  if (!iso) return null;
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return null;
+
+  return date.toLocaleDateString(undefined, {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
+}
+
 /** Book with cover, author and reading progress. Shared by Reading and Library. */
-export function BookCard({ book, compact = false }: BookCardProps) {
+export function BookCard({ book, compact = false, children }: BookCardProps) {
+  const finishedOn = formatFinishedDate(book.finishedAt);
   const finished = isBookFinished(book);
   const percentage = Math.round(getBookProgress(book) * 100);
 
@@ -74,7 +89,7 @@ export function BookCard({ book, compact = false }: BookCardProps) {
 
           <Text style={styles.pages}>
             {finished
-              ? `${book.pages} pages`
+              ? `${book.pages} pages${finishedOn ? ` · finished ${finishedOn}` : ''}`
               : `Page ${book.currentPage} of ${book.pages || '?'}`}
           </Text>
 
@@ -95,6 +110,8 @@ export function BookCard({ book, compact = false }: BookCardProps) {
           </Text>
         </View>
       </View>
+
+      {children}
     </View>
   );
 }

@@ -194,9 +194,16 @@ const weeklyQuests: Quest[] = [
     icon: Trophy,
     color: COLORS.peach,
     iconColor: "#A77C6C",
-    measure: null,
-    unavailableReason:
-      "Updating your current page isn't possible yet, so finished books can't be tracked.",
+    measure: ({ books }) => {
+      const weekStart = startOfWeek().getTime();
+      return books.filter(
+        (book) =>
+          book.status === "finished" &&
+          book.finishedAt &&
+          new Date(book.finishedAt).getTime() >= weekStart,
+      ).length;
+    },
+    action: { label: "Go to my books", route: "/reading" },
   },
   {
     id: "study",
