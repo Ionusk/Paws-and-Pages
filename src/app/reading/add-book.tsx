@@ -13,6 +13,7 @@ import {
   Alert,
 } from 'react-native';
 import { router } from 'expo-router';
+import { goBack } from '@/lib/navigation';
 import {
   ArrowLeft,
   BookPlus,
@@ -169,7 +170,7 @@ export default function AddBookScreen() {
         {/* BACK BUTTON */}
         <TouchableOpacity
           style={styles.backButton}
-          onPress={() => router.back()}
+          onPress={() => goBack('/reading')}
         >
           <ArrowLeft size={19} color={COLORS.dark} />
 

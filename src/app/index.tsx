@@ -1,5 +1,5 @@
 
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -35,7 +35,15 @@ export default function WelcomeScreen() {
   const [buttonHovered, setButtonHovered] = useState(false);
 
   const { user, isLoading, clearSession } = useAuth0();
+  const hasUser = Boolean(user);
   const [leaving, setLeaving] = useState(false);
+  // Read the "just logged in" flag once per visit. The effect below can run
+  // several times (Auth0 refreshes `user` when a token is requested), and a
+  // re-run must not mistake the login return for a normal visit.
+  const loginReturnRef = useRef<boolean | null>(null);
+  if (loginReturnRef.current === null) {
+    loginReturnRef.current = consumeLoginReturn();
+  }
 
   // Every time this screen is shown: if someone is logged in, log them out.
   // Exception: on web, Auth0 lands here right after login, so in that case
@@ -46,13 +54,11 @@ export default function WelcomeScreen() {
         return;
       }
 
-      const justLoggedIn = consumeLoginReturn();
-
-      if (!user) {
+      if (!hasUser) {
         return;
       }
 
-      if (justLoggedIn) {
+      if (loginReturnRef.current) {
         router.replace('/login');
         return;
       }
@@ -66,7 +72,7 @@ export default function WelcomeScreen() {
       )
         .catch((error) => console.error('Logout error:', error))
         .finally(() => setLeaving(false));
-    }, [isLoading, user, clearSession, router])
+    }, [isLoading, hasUser, clearSession, router])
   );
 
   if (isLoading || leaving || (user && Platform.OS === 'web')) {

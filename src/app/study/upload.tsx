@@ -14,6 +14,7 @@ import {
 
 import * as DocumentPicker from 'expo-document-picker';
 import { router } from 'expo-router';
+import { goBack } from '@/lib/navigation';
 import { useAuth0 } from 'react-native-auth0';
 
 import {
@@ -226,7 +227,7 @@ export default function UploadScreen() {
         <View style={styles.header}>
           <Pressable
             style={styles.backButton}
-            onPress={() => router.back()}
+            onPress={() => goBack('/study')}
           >
             <ArrowLeft size={21} color="#655274" strokeWidth={2} />
           </Pressable>

@@ -4,6 +4,7 @@ import { Stack } from "expo-router";
 import { Platform, Text } from "react-native";
 import { Auth0Provider } from "react-native-auth0";
 import { ConversationProvider } from "@elevenlabs/react-native";
+import { SkinProvider } from "../components/SkinProvider";
 import * as SplashScreen from "expo-splash-screen";
 
 import {
@@ -83,15 +84,17 @@ export default function RootLayout() {
           }
         : {})}
     >
-      <ConversationProvider>
-        <Stack
-          screenOptions={{
-            headerShown: false,
-            contentStyle: { backgroundColor: "#FFF8F1" },
-            animation: "fade",
-          }}
-        />
-      </ConversationProvider>
+      <SkinProvider>
+        <ConversationProvider>
+          <Stack
+            screenOptions={{
+              headerShown: false,
+              contentStyle: { backgroundColor: "#FFF8F1" },
+              animation: "fade",
+            }}
+          />
+        </ConversationProvider>
+      </SkinProvider>
     </Auth0Provider>
   );
 }

@@ -9,7 +9,7 @@
     ScrollView,
     useWindowDimensions,
   } from 'react-native';
-  import { router } from 'expo-router';
+import { goBack } from '@/lib/navigation';
   import {
     ArrowLeft,
     Pause,
@@ -82,7 +82,7 @@
             <TouchableOpacity
               style={styles.backButton}
               activeOpacity={0.8}
-              onPress={() => router.back()}
+              onPress={() => goBack('/reading')}
             >
               <ArrowLeft size={19} color={COLORS.dark} />
               <Text style={styles.backButtonText}>
@@ -247,7 +247,7 @@
                     <TouchableOpacity
                       style={styles.backHomeButton}
                       activeOpacity={0.85}
-                      onPress={() => router.back()}
+                      onPress={() => goBack('/reading')}
                     >
                       <BookOpen
                         size={18}

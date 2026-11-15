@@ -13,14 +13,19 @@ const cdp = new CdpClient();
 
 const connection = new Connection("https://api.devnet.solana.com", "confirmed");
 
-const USER_ID = 23;
+// Usage: node <script> [userId]   (default: 23)
+const USER_ID = Number(process.argv[2] ?? 23);
+if (!Number.isInteger(USER_ID) || USER_ID <= 0) {
+  throw new Error("userId invalid.");
+}
 const AMOUNT = 500n;
 const TREASURY_NAME = "paws-and-pages-devnet-test";
 
 async function main() {
   // 1. Citim wallet-ul utilizatorului din baza de date.
   const result = await pool.query(
-    "SELECT solana_wallet_address FROM users WHERE id = 23",
+    "SELECT solana_wallet_address FROM users WHERE id = $1",
+    [USER_ID],
   );
 
   const userAddress = result.rows[0]?.solana_wallet_address;

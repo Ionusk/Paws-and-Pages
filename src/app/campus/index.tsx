@@ -3,13 +3,13 @@ import {
   View, Text, StyleSheet, SafeAreaView,
   ScrollView, TouchableOpacity, Alert,
 } from 'react-native';
-import { router } from 'expo-router';
+import { goBack } from '@/lib/navigation';
 
 export default function CampusScreen() {
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.container}>
-        <TouchableOpacity onPress={() => router.back()}>
+        <TouchableOpacity onPress={() => goBack('/home')}>
           <Text style={styles.back}>← Back</Text>
         </TouchableOpacity>
 

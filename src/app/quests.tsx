@@ -1,4 +1,8 @@
-import { router } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
+import { useCallback, useState } from "react";
+import { useAuth0 } from "react-native-auth0";
+import { goBack } from '@/lib/navigation';
+import { API_AUDIENCE, API_URL } from "@/lib/voiceConversations";
 import {
   ArrowLeft,
   ArrowRight,
@@ -14,6 +18,7 @@ import {
   Trophy,
 } from "lucide-react-native";
 import {
+  ActivityIndicator,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -40,6 +45,10 @@ const COLORS = {
   border: "#E7D9EE",
 };
 
+const AUTH_SCOPE = "openid profile email offline_access";
+
+// Look of each quest. Progress, target and reward come from the server
+// (GET /api/quests), which computes them from your TigerData activity.
 type Quest = {
   id: string;
   title: string;
@@ -51,6 +60,16 @@ type Quest = {
   icon: typeof BookOpen;
   color: string;
   iconColor: string;
+};
+
+type ClaimStatus = "pending" | "submitted" | "confirmed" | null;
+
+type ServerQuest = {
+  id: string;
+  reward: number;
+  target: number;
+  progress: number;
+  claimStatus: ClaimStatus;
 };
 
 const dailyQuests: Quest[] = [
@@ -81,7 +100,7 @@ const dailyQuests: Quest[] = [
   {
     id: "review",
     title: "Share your thoughts",
-    description: "Write a review for a book.",
+    description: "Write your impressions after a reading session.",
     reward: 20,
     progress: 0,
     target: 1,
@@ -120,7 +139,7 @@ const weeklyQuests: Quest[] = [
   {
     id: "study",
     title: "Curious minds",
-    description: "Complete 3 study sessions this week.",
+    description: "Complete 3 practice quizzes this week.",
     reward: 45,
     progress: 0,
     target: 3,
@@ -131,10 +150,26 @@ const weeklyQuests: Quest[] = [
   },
 ];
 
-function QuestCard({ quest }: { quest: Quest }) {
+type QuestCardProps = {
+  quest: Quest;
+  claimStatus: ClaimStatus;
+  claiming: boolean;
+  disabled: boolean;
+  onClaim: () => void;
+};
+
+function QuestCard({
+  quest,
+  claimStatus,
+  claiming,
+  disabled,
+  onClaim,
+}: QuestCardProps) {
   const Icon = quest.icon;
   const progress = Math.min(quest.progress / quest.target, 1);
   const completed = quest.progress >= quest.target;
+  const claimed = claimStatus === "confirmed";
+  const confirming = claimStatus === "pending" || claimStatus === "submitted";
 
   return (
     <View style={styles.questCard}>
@@ -188,26 +223,176 @@ function QuestCard({ quest }: { quest: Quest }) {
           </Text>
         </View>
 
-        <Text style={styles.rewardCaption}>
-          {completed ? "Reward ready" : "Keep going!"}
-        </Text>
+        {claimed ? (
+          <View style={styles.claimedPill}>
+            <Check size={13} color="#71866F" />
+            <Text style={styles.claimedText}>+{quest.reward} PAW received</Text>
+          </View>
+        ) : completed ? (
+          <Pressable
+            onPress={onClaim}
+            disabled={disabled}
+            style={({ pressed }) => [
+              styles.claimButton,
+              (pressed || claiming || disabled) && styles.pressed,
+            ]}
+          >
+            {claiming ? (
+              <ActivityIndicator size="small" color={COLORS.white} />
+            ) : (
+              <Coins size={14} color={COLORS.white} />
+            )}
+            <Text style={styles.claimButtonText}>
+              {claiming
+                ? "Sending..."
+                : confirming
+                  ? "Check reward"
+                  : `Claim ${quest.reward} PAW`}
+            </Text>
+          </Pressable>
+        ) : (
+          <Text style={styles.rewardCaption}>Keep going!</Text>
+        )}
       </View>
     </View>
   );
 }
 
 export default function QuestsScreen() {
-  const { balance, loading: walletLoading } = usePawWallet();
+  const { getCredentials } = useAuth0();
+  const {
+    balance,
+    loading: walletLoading,
+    refreshWallet,
+  } = usePawWallet();
   const displayedBalance = walletLoading ? "..." : (balance ?? "—");
 
-  const totalDailyRewards = dailyQuests.reduce(
-    (total, quest) => total + quest.reward,
+  const [serverQuests, setServerQuests] = useState<ServerQuest[]>([]);
+  const [questsLoading, setQuestsLoading] = useState(true);
+  const [claimingId, setClaimingId] = useState<string | null>(null);
+  const [notice, setNotice] = useState("");
+
+  const getToken = useCallback(async () => {
+    const credentials = await getCredentials(AUTH_SCOPE, 0, {
+      audience: API_AUDIENCE,
+    });
+
+    if (!credentials?.accessToken) {
+      throw new Error("Nu am putut obține tokenul Auth0.");
+    }
+
+    return credentials.accessToken;
+  }, [getCredentials]);
+
+  const loadQuests = useCallback(async () => {
+    try {
+      const token = await getToken();
+      const response = await fetch(`${API_URL}/api/quests`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || `Server error: ${response.status}`);
+      }
+
+      setServerQuests(data.quests);
+    } catch (error) {
+      console.error("Quests loading error:", error);
+      setNotice(
+        error instanceof Error ? error.message : "Nu am putut încărca quest-urile.",
+      );
+    } finally {
+      setQuestsLoading(false);
+    }
+  }, [getToken]);
+
+  // Reload whenever the screen is shown, so new activity counts right away.
+  useFocusEffect(
+    useCallback(() => {
+      loadQuests();
+    }, [loadQuests]),
+  );
+
+  const handleClaim = async (quest: Quest) => {
+    if (claimingId) return;
+
+    try {
+      setClaimingId(quest.id);
+      setNotice("");
+
+      const token = await getToken();
+      const response = await fetch(
+        `${API_URL}/api/quests/${encodeURIComponent(quest.id)}/claim`,
+        { method: "POST", headers: { Authorization: `Bearer ${token}` } },
+      );
+      const data = await response.json().catch(() => ({}));
+
+      if (response.status === 202 || data.pendingConfirmation) {
+        setNotice(data.error || "Recompensa este încă în curs de confirmare.");
+      } else if (!response.ok || !data.success) {
+        throw new Error(data.error || "Nu am putut primi recompensa.");
+      } else {
+        setNotice(`+${quest.reward} PAW au ajuns în wallet-ul tău!`);
+      }
+
+      await Promise.all([loadQuests(), refreshWallet()]);
+    } catch (error) {
+      console.error("Quest claim error:", error);
+      setNotice(
+        error instanceof Error ? error.message : "Nu am putut primi recompensa.",
+      );
+    } finally {
+      setClaimingId(null);
+    }
+  };
+
+  // Combine the look of each quest with the real numbers from the server.
+  const withProgress = (quests: Quest[]) =>
+    quests.map((quest) => {
+      const live = serverQuests.find((q) => q.id === quest.id);
+
+      return {
+        quest: live
+          ? {
+              ...quest,
+              reward: live.reward,
+              target: live.target,
+              progress: live.progress,
+            }
+          : quest,
+        claimStatus: live?.claimStatus ?? null,
+      };
+    });
+
+  const daily = withProgress(dailyQuests);
+  const weekly = withProgress(weeklyQuests);
+
+  const totalDailyRewards = daily.reduce(
+    (total, { quest }) => total + quest.reward,
     0,
   );
 
-  const totalWeeklyRewards = weeklyQuests.reduce(
-    (total, quest) => total + quest.reward,
+  const totalWeeklyRewards = weekly.reduce(
+    (total, { quest }) => total + quest.reward,
     0,
+  );
+
+  const renderQuest = ({
+    quest,
+    claimStatus,
+  }: {
+    quest: Quest;
+    claimStatus: ClaimStatus;
+  }) => (
+    <QuestCard
+      key={quest.id}
+      quest={quest}
+      claimStatus={claimStatus}
+      claiming={claimingId === quest.id}
+      disabled={claimingId !== null}
+      onClaim={() => handleClaim(quest)}
+    />
   );
 
   return (
@@ -222,7 +407,7 @@ export default function QuestsScreen() {
         {/* HEADER */}
         <View style={styles.header}>
           <Pressable
-            onPress={() => router.back()}
+            onPress={() => goBack('/home')}
             style={({ pressed }) => [
               styles.backButton,
               pressed && styles.pressed,
@@ -282,11 +467,18 @@ export default function QuestsScreen() {
           </View>
         </View>
 
-        <View style={styles.questList}>
-          {dailyQuests.map((quest) => (
-            <QuestCard key={quest.id} quest={quest} />
-          ))}
-        </View>
+        {notice !== "" && (
+          <Pressable onPress={() => setNotice("")} style={styles.notice}>
+            <Sparkles size={15} color={COLORS.darkPink} />
+            <Text style={styles.noticeText}>{notice}</Text>
+          </Pressable>
+        )}
+
+        {questsLoading && (
+          <ActivityIndicator color={COLORS.darkPink} style={styles.loader} />
+        )}
+
+        <View style={styles.questList}>{daily.map(renderQuest)}</View>
 
         {/* WEEKLY SECTION */}
         <View style={styles.sectionHeader}>
@@ -307,11 +499,7 @@ export default function QuestsScreen() {
           </View>
         </View>
 
-        <View style={styles.questList}>
-          {weeklyQuests.map((quest) => (
-            <QuestCard key={quest.id} quest={quest} />
-          ))}
-        </View>
+        <View style={styles.questList}>{weekly.map(renderQuest)}</View>
 
         {/* BOTTOM NOTE */}
         <View style={styles.infoCard}>
@@ -620,6 +808,54 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontFamily: "Nunito_700Bold",
     color: COLORS.darkPink,
+  },
+  claimButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: COLORS.darkPink,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 14,
+  },
+  claimButtonText: {
+    fontSize: 11,
+    fontFamily: "Nunito_800ExtraBold",
+    color: COLORS.white,
+  },
+  claimedPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    backgroundColor: COLORS.sage,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 14,
+  },
+  claimedText: {
+    fontSize: 10,
+    fontFamily: "Nunito_800ExtraBold",
+    color: "#71866F",
+  },
+  notice: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+    backgroundColor: COLORS.white,
+    borderWidth: 1,
+    borderColor: COLORS.pink,
+    borderRadius: 15,
+    padding: 13,
+    marginBottom: 16,
+  },
+  noticeText: {
+    flex: 1,
+    fontSize: 12,
+    fontFamily: "Nunito_700Bold",
+    color: COLORS.text,
+  },
+  loader: {
+    marginBottom: 14,
   },
   infoCard: {
     backgroundColor: COLORS.lavender,

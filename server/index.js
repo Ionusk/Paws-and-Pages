@@ -9,8 +9,7 @@ import sharp from "sharp";
 import { GoogleGenAI } from "@google/genai";
 import { auth } from "express-oauth2-jwt-bearer";
 import { pool } from "./db.js";
-import { createShopRouter } from "./shop.js";
-import { getOrCreateUserWallet, getPawBalance } from "./solana.js";
+import { createQuestsRouter } from "./quests.js";
 
 dotenv.config();
 
@@ -47,10 +46,165 @@ const requireAuth = auth({
 });
 
 // =========================================================
-// SHOP - SOLANA PAW TOKEN
+// QUESTS - progres din TigerData, recompense PAW (Solana)
 // =========================================================
 
-app.use("/api/shop", createShopRouter({ requireAuth }));
+app.use("/api/quests", createQuestsRouter({ requireAuth }));
+
+// =========================================================
+// SOLANA (OPTIONAL) - WALLET + SHOP PAW TOKEN
+// =========================================================
+// solana.js și shop.js aruncă o eroare la import dacă lipsesc cheile
+// Solana/CDP din server/.env. Le încărcăm opțional, ca restul aplicației
+// (study, reading, ElevenLabs) să funcționeze și fără ele.
+
+let getOrCreateUserWallet = null;
+let getPawBalance = null;
+let solanaUnavailableReason = null;
+
+try {
+  const solana = await import("./solana.js");
+  const shop = await import("./shop.js");
+
+  getOrCreateUserWallet = solana.getOrCreateUserWallet;
+  getPawBalance = solana.getPawBalance;
+
+  app.use("/api/shop", shop.createShopRouter({ requireAuth }));
+} catch (error) {
+  solanaUnavailableReason = error.message;
+
+  console.warn(
+    "Solana dezactivat (wallet + shop):",
+    solanaUnavailableReason
+  );
+}
+
+const SOLANA_NOT_CONFIGURED = {
+  success: false,
+  code: "solana_not_configured",
+  error:
+    "Wallet-ul PAW nu este configurat pe acest server (lipsesc cheile Solana din server/.env).",
+};
+
+// Fără Solana: catalogul și echiparea funcționează din TigerData,
+// doar cumpărarea (tranzacție PAW) este indisponibilă.
+async function getShopUserId(req) {
+  const auth0Id = req.auth?.payload?.sub;
+
+  if (!auth0Id) {
+    return null;
+  }
+
+  const result = await pool.query(
+    "SELECT id FROM users WHERE auth0_id = $1 LIMIT 1",
+    [auth0Id]
+  );
+
+  return result.rows[0]?.id ?? null;
+}
+
+if (solanaUnavailableReason) {
+  app.get("/api/shop", requireAuth, async (req, res) => {
+    try {
+      const userId = await getShopUserId(req);
+
+      if (!userId) {
+        return res.status(404).json({
+          success: false,
+          error: "Utilizatorul nu există.",
+        });
+      }
+
+      const result = await pool.query(
+        `SELECT
+          s.id,
+          s.name,
+          s.description,
+          s.price,
+          (i.item_id IS NOT NULL) AS owned,
+          COALESCE(i.is_equipped, FALSE) AS equipped
+         FROM shop_items s
+         LEFT JOIN user_inventory i
+           ON i.item_id = s.id AND i.user_id = $1
+         WHERE s.is_active = TRUE
+         ORDER BY s.price ASC`,
+        [userId]
+      );
+
+      res.json({ success: true, items: result.rows });
+    } catch (error) {
+      console.error("Shop catalog error:", error);
+      res.status(500).json({
+        success: false,
+        error: "Nu am putut încărca magazinul.",
+      });
+    }
+  });
+
+  app.post("/api/shop/equip", requireAuth, async (req, res) => {
+    const { itemId } = req.body || {};
+
+    if (typeof itemId !== "string" || !/^[a-zA-Z0-9_-]{1,64}$/.test(itemId)) {
+      return res.status(400).json({
+        success: false,
+        error: "ID-ul skin-ului este invalid.",
+      });
+    }
+
+    const client = await pool.connect();
+
+    try {
+      const userId = await getShopUserId(req);
+
+      if (!userId) {
+        return res.status(404).json({
+          success: false,
+          error: "Utilizatorul nu există.",
+        });
+      }
+
+      await client.query("BEGIN");
+
+      const owned = await client.query(
+        "SELECT 1 FROM user_inventory WHERE user_id = $1 AND item_id = $2",
+        [userId, itemId]
+      );
+
+      if (owned.rows.length === 0) {
+        await client.query("ROLLBACK");
+        return res.status(403).json({
+          success: false,
+          error: "Nu deții acest skin.",
+        });
+      }
+
+      await client.query(
+        "UPDATE user_inventory SET is_equipped = (item_id = $2) WHERE user_id = $1",
+        [userId, itemId]
+      );
+      await client.query("COMMIT");
+
+      res.json({ success: true, equipped: itemId });
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      console.error("Shop equip error:", error);
+      res.status(500).json({
+        success: false,
+        error: "Nu am putut echipa acest skin.",
+      });
+    } finally {
+      client.release();
+    }
+  });
+
+  app.use("/api/shop", (req, res) => {
+    res.status(503).json({
+      ...SOLANA_NOT_CONFIGURED,
+      error:
+        "Cumpărarea skin-urilor nu este disponibilă: lipsesc cheile Solana din server/.env.",
+    });
+  });
+}
 
 // =========================================================
 // GEMINI CONFIGURATION
@@ -1059,25 +1213,40 @@ app.post(
       );
 
       // CREATE / RETRIEVE SOLANA WALLET
-      const walletAddress = await getOrCreateUserWallet(user.id);
+      // Dacă Solana nu e configurat sau nu răspunde, utilizatorul se
+      // loghează oricum; wallet-ul va fi creat la următoarea sincronizare.
+      let wallet = null;
 
-      // READ REAL PAW BALANCE FROM SOLANA
-      const pawBalance = await getPawBalance(walletAddress);
+      if (getOrCreateUserWallet && getPawBalance) {
+        try {
+          const walletAddress = await getOrCreateUserWallet(user.id);
 
-      console.log("Wallet Solana:", walletAddress);
-      console.log("Sold PAW:", pawBalance);
+          // READ REAL PAW BALANCE FROM SOLANA
+          const pawBalance = await getPawBalance(walletAddress);
+
+          console.log("Wallet Solana:", walletAddress);
+          console.log("Sold PAW:", pawBalance);
+
+          wallet = {
+            address: walletAddress,
+            pawBalance,
+          };
+        } catch (walletError) {
+          console.error(
+            "Wallet Solana indisponibil la sincronizare:",
+            walletError.message
+          );
+        }
+      }
 
       return res.json({
         success: true,
         message: "Utilizator sincronizat cu TigerData!",
         user: {
           ...user,
-          solana_wallet_address: walletAddress,
+          solana_wallet_address: wallet?.address ?? null,
         },
-        wallet: {
-          address: walletAddress,
-          pawBalance,
-        },
+        wallet,
       });
     } catch (error) {
       console.error(
@@ -1098,6 +1267,10 @@ app.post(
 // =========================================================
 
 app.get("/api/wallet", requireAuth, async (req, res) => {
+  if (!getOrCreateUserWallet || !getPawBalance) {
+    return res.status(503).json(SOLANA_NOT_CONFIGURED);
+  }
+
   try {
     const auth0Id = req.auth?.payload?.sub;
 

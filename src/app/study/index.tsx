@@ -10,6 +10,7 @@ import {
   Platform,
 } from 'react-native';
 import { router, useFocusEffect } from 'expo-router';
+import { goBack } from '@/lib/navigation';
 import { useAuth0 } from 'react-native-auth0';
 import {
   ArrowLeft,
@@ -165,7 +166,7 @@ export default function StudyScreen() {
           {/* Header */}
           <View style={styles.header}>
             <Pressable
-              onPress={() => router.back()}
+              onPress={() => goBack('/home')}
               style={({ pressed }) => [
                 styles.backButton,
                 pressed && styles.pressed,

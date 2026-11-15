@@ -4,6 +4,7 @@ import {
   TouchableOpacity, SafeAreaView, Alert,
 } from 'react-native';
 import { router } from 'expo-router';
+import { goBack } from '@/lib/navigation';
 
 export default function ReviewScreen() {
   const [book, setBook] = useState('');
@@ -26,7 +27,7 @@ export default function ReviewScreen() {
   return (
     <SafeAreaView style={styles.safe}>
       <View style={styles.container}>
-        <TouchableOpacity onPress={() => router.back()}>
+        <TouchableOpacity onPress={() => goBack('/reading')}>
           <Text style={styles.back}>← Back</Text>
         </TouchableOpacity>
 

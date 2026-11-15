@@ -1,5 +1,6 @@
 
 import { router } from "expo-router";
+import { goBack } from '@/lib/navigation';
 import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -367,7 +368,7 @@ export default function LoginScreen() {
 
         {/* BACK BUTTON */}
         <TouchableOpacity
-          onPress={() => router.back()}
+          onPress={() => goBack('/')}
           style={styles.backButton}
           activeOpacity={0.7}
         >

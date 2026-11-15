@@ -19,6 +19,7 @@ import {
   useLocalSearchParams,
   router,
 } from "expo-router";
+import { goBack } from '@/lib/navigation';
 
 import { useAuth0 } from "react-native-auth0";
 
@@ -45,7 +46,7 @@ function TopNavigation() {
           styles.navigationButton,
           pressed && styles.navigationButtonPressed,
         ]}
-        onPress={() => router.back()}
+        onPress={() => goBack('/study')}
       >
         <ArrowLeft size={17} color="#493653" />
         <Text style={styles.navigationButtonText}>Back</Text>

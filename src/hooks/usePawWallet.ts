@@ -37,10 +37,19 @@ export function usePawWallet() {
         },
       });
 
-      const data = await response.json();
+      const data = await response.json().catch(() => ({}));
+
+      // The server runs without Solana keys: not an error, just no wallet.
+      if (data.code === "solana_not_configured") {
+        setWallet(null);
+        setError(data.error);
+        return;
+      }
 
       if (!response.ok || !data.success) {
-        throw new Error(data.error || "Nu am putut obține soldul PAW.");
+        throw new Error(
+          data.error || `Nu am putut obține soldul PAW (${response.status}).`,
+        );
       }
 
       setWallet({

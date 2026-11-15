@@ -10,6 +10,7 @@ import {
   Pressable,
 } from "react-native";
 import { router, useFocusEffect } from "expo-router";
+import { goBack } from '@/lib/navigation';
 import { useAuth0 } from "react-native-auth0";
 import {
   ArrowLeft,
@@ -123,7 +124,7 @@ export default function AISummaryScreen() {
       <View style={styles.header}>
         <Pressable
           style={styles.backButton}
-          onPress={() => router.back()}
+          onPress={() => goBack('/study')}
         >
           <ArrowLeft size={22} color="#51446B" />
         </Pressable>

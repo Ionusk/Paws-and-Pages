@@ -9,6 +9,7 @@ import {
   Pressable,
 } from "react-native";
 import { useLocalSearchParams, router } from "expo-router";
+import { goBack } from '@/lib/navigation';
 import {
   ArrowLeft,
   BookOpen,
@@ -60,7 +61,7 @@ export default function SummaryScreen() {
     return (
       <View style={styles.container}>
         <View style={styles.header}>
-          <Pressable style={styles.backButton} onPress={() => router.back()}>
+          <Pressable style={styles.backButton} onPress={() => goBack('/study')}>
             <ArrowLeft size={22} color="#51446B" />
           </Pressable>
           <Text style={styles.headerTitle}>AI Summary</Text>
@@ -101,7 +102,7 @@ function SummaryContent({
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Pressable style={styles.backButton} onPress={() => router.back()}>
+        <Pressable style={styles.backButton} onPress={() => goBack('/study')}>
           <ArrowLeft size={22} color="#51446B" />
         </Pressable>
 
